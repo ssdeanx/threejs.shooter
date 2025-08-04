@@ -1,0 +1,238 @@
+# threejs-shooter .roorules
+# Source of truth for governance and enforceable static rules for this repository.
+# All rules are grounded in current code artifacts referenced inline as [path:line] links.
+
+meta:
+  project: threejs-shooter
+  stack:
+    - TypeScript 5 [tsconfig.json:1-25]
+    - Vite 7 [vite.config.ts:1-23]
+    - ESLint 9 flat config [eslint.config.js:1-33]
+    - Three.js ^0.178.0, cannon-es ^0.20.0 [package.json:13-16]
+  scripts:
+    dev: vite --host [package.json:6-12]
+    build: tsc && vite build [package.json:6-12]
+    preview: vite preview [package.json:6-12]
+    lint: eslint src --ext .ts [package.json:6-12]
+    type-check: tsc --noEmit [package.json:6-12]
+
+governance:
+  architecture:
+    ecs:
+      pattern: Bitmask archetypes + sparse component arrays
+      references:
+        - core types and bitmasks [src/core/types.ts:1-4]
+        - component registry/bitset [src/core/ComponentType.ts:1-37]
+        - system base [src/core/System.ts:1-25]
+        - entity manager [src/core/EntityManager.ts:1-139]
+      policies:
+        - Component keys MUST be centralized and type-safe (no free strings). See enforceable:typescript.componentKeys.
+        - Systems MUST declare required components via names matching centralized keys. [src/core/System.ts:3-12]
+        - Entity lifecycle MUST notify systems on add/remove/destroy for cleanup (physics bodies, meshes, listeners). See enforceable:governed.lifecycle.
+        - Cap component type count or migrate bitset to bigint when approaching 31 components (bitwise ops are 32-bit). [src/core/ComponentType.ts:3,11-15]
+    rendering:
+      pattern: Three.js scene/camera/renderer in main; RenderSystem manages meshes/material caches. [src/main.ts:20-41] [src/systems/RenderSystem.ts:8-107]
+      policies:
+        - Every allocation path MUST have symmetric disposal (geometry, materials, textures). See enforceable:rendering.disposal.
+        - Player meshes MUST be tagged for camera collision exclusion (userData.isPlayer). See enforceable:rendering.tagging.
+    physics:
+      pattern: cannon-es world fixedStep; bodies per entity; velocity/rotation mapped back. [src/systems/PhysicsSystem.ts:9-144]
+      policies:
+        - Fixed timestep is canonical; gameplay forces MUST NOT be scaled by frame delta; use fixedStep constant. See enforceable:physics.timestep.
+        - On entity destroy, physics bodies MUST be removed. See enforceable:governed.lifecycle.
+    input:
+      pattern: Input duplication exists; MovementSystem attaches DOM listeners; CameraSystem also attaches. [src/systems/MovementSystem.ts:34-81] [src/systems/CameraSystem.ts:35-55]
+      policies:
+        - Single InputSystem is the ONLY owner of DOM event listeners.
+        - Other systems MUST consume input via InputSystem API. See enforceable:input.singleSource.
+  code-style:
+    naming:
+      - Component interfaces: PascalCase with Component suffix (e.g., PositionComponent). [src/components/TransformComponents.ts:1-24]
+      - Centralized key names mirror interface names.
+    modules:
+      - Use .js extension in TS imports consistent with bundler resolution. [tsconfig.json:9]
+    magic-numbers:
+      - Extract gameplay/camera/physics constants to config modules; systems import from config. [src/systems/CameraSystem.ts:15-26] [src/systems/MovementSystem.ts:131-135] [src/systems/PhysicsSystem.ts:23]
+    logging:
+      - No console.log in production paths; use a logger with env guard. [src/systems/PhysicsSystem.ts:39,116]
+  testing:
+    baseline:
+      - Introduce unit tests for lifecycle cleanup: create/destroy entity leaves caches and world sizes unchanged.
+      - Add tests for centralized component keys and EntityManager queries.
+  process:
+    reviews:
+      checklists:
+        - Lifecycle: onDispose implemented and called for new/changed systems.
+        - Input: no DOM listeners added outside InputSystem.
+        - Physics timestep: no deltaTime scaling of forces outside PhysicsSystem.
+        - Rendering disposal: materials and geometries disposed; caches cleared.
+        - Component keys: factories used, no raw object literals for components in app code.
+        - Magic numbers moved to config modules.
+    git:
+      hooks:
+        - pre-commit: lint-staged, type-check quick path
+        - pre-push: lint:ci, type-check, build:ci
+
+enforceable:
+  typescript:
+    compilerOptions:
+      requiredSettings:
+        noUncheckedIndexedAccess: true  # surface sparse array holes [src/core/EntityManager.ts:8,45-47]
+        exactOptionalPropertyTypes: true
+        noPropertyAccessFromIndexSignature: true
+      notes:
+        - "Keep moduleResolution: bundler and allowImportingTsExtensions: true as configured. [tsconfig.json:8-11]"
+    componentKeys:
+      description: Centralize component keys in a const object and type EntityManager APIs to ComponentKey.
+      acceptance:
+        - A file exports COMPONENTS as const mapping with keys equal to interface names.
+        - type ComponentKey = keyof typeof COMPONENTS
+        - EntityManager.addComponent/getComponent signatures accept ComponentKey. [src/core/EntityManager.ts:37,76,81]
+      deviationHandling: PRs adding free-string component keys are rejected.
+  eslint:
+    configChanges:
+      rules:
+        '@typescript-eslint/no-explicit-any': error  # tighten from warn [eslint.config.js:29]
+        '@typescript-eslint/explicit-function-return-type':
+          - warn
+          - allowExpressions: true
+            allowTypedFunctionExpressions: true
+        no-console:
+          - warn
+          - allow:
+              - warn
+              - error
+        # Optional post-refactor: enable no-magic-numbers in systems when constants extracted
+        # 'no-magic-numbers': ['warn', { ignore: [-1,0,1,2], ignoreArrayIndexes: true, enforceConst: true }]
+      notes:
+        - Parser and plugin remain as configured. [eslint.config.js:8-14,23-31]
+    grepGuards:
+      - name: forbid-dom-listeners-outside-InputSystem
+        pattern: 'addEventListener\\('
+        include: 'src/systems/**/*.ts'
+        exclude: 'src/systems/InputSystem.ts'
+        severity: error
+        rationale: Single input source policy. [src/systems/MovementSystem.ts:34-81]
+      - name: timestep-force-delta-usage
+        pattern: 'addForce\\(.*deltaTime|setVelocity\\(.*deltaTime'
+        include: 'src/systems/**/*.ts'
+        exclude: 'src/systems/PhysicsSystem.ts'
+        severity: error
+        rationale: Fixed timestep canonicalization. [src/systems/MovementSystem.ts:130-136]
+  governed:
+    lifecycle:
+      systemInterface:
+        requiredHooks:
+          - onDispose(): void
+        optionalHooks:
+          - onInit(em): void
+          - onEntityAdded(id): void
+          - onEntityRemoved(id): void
+      entityManager:
+        requiredBehavior:
+          - Calls onDispose on system when destroying entities that system owns resources for, and on global teardown.
+          - Notifies systems on entity removal so PhysicsSystem can remove bodies [src/systems/PhysicsSystem.ts:133-139] and RenderSystem can remove meshes/materials [src/systems/RenderSystem.ts:99-106].
+      acceptance:
+        - Destroying an entity that had RigidBodyComponent results in zero dangling bodies in world.
+        - Destroying an entity with MeshComponent results in geometry and material disposal and cache sizes unchanged.
+  input:
+    singleSource:
+      rule:
+        - Only InputSystem attaches DOM listeners (keyboard/mouse/pointer lock). [src/systems/InputSystem.ts:100-160]
+        - CameraSystem/MovementSystem must depend on InputSystem API rather than listeners. [src/systems/CameraSystem.ts:35-55] [src/systems/MovementSystem.ts:34-81]
+      enforcement:
+        - grepGuards.forbid-dom-listeners-outside-InputSystem
+        - Code review checklist item.
+  physics:
+    timestep:
+      rule:
+        - Forces/velocities in gameplay systems must not be multiplied by variable deltaTime; use PhysicsSystem.fixedStep or derive impulse per-step.
+      enforcement:
+        - grepGuards.timestep-force-delta-usage
+        - Code review checklist item.
+  rendering:
+    disposal:
+      rule:
+        - Dispose both geometry and materials; clear caches in system onDispose. [src/systems/RenderSystem.ts:99-106]
+      acceptance:
+        - After create/remove cycle, materialCache and meshCache sizes return to baseline; no WebGL warnings/leaks in dev tools.
+    tagging:
+      rule:
+        - Player mesh must have userData.isPlayer = true to exclude camera collision. [src/systems/CameraSystem.ts:125-129]
+      enforcement:
+        - Review main entity creation and RenderSystem tagging policy.
+
+ci:
+  scripts:
+    add:
+      - name: lint:ci
+        value: 'eslint --max-warnings=0 src --ext .ts'
+      - name: format:check
+        value: 'prettier -c .'
+      - name: build:ci
+        value: 'tsc --noEmit && vite build'
+    requiredOn:
+      - pre-push
+  grepChecks:
+    run:
+      - name: forbid-dom-listeners-outside-InputSystem
+      - name: timestep-force-delta-usage
+  gates:
+    - type-check
+    - lint:ci
+    - build:ci
+  notes:
+    - Keep dev script behavior unchanged.
+
+migration-plan:
+  - M1: Centralize component keys
+    steps:
+      - Create COMPONENTS map and ComponentKey type.
+      - Update EntityManager signatures and call sites.
+    acceptance:
+      - tsc passes with noUncheckedIndexedAccess enabled.
+  - M2: Input consolidation
+    steps:
+      - Move DOM listeners into InputSystem; expose state/query API.
+      - Refactor MovementSystem and CameraSystem to consume input API.
+    acceptance:
+      - grep guard passes; gameplay input unaffected.
+  - M3: Lifecycle cleanup
+    steps:
+      - Add onDispose hooks to systems; wire EntityManager notifications.
+      - Ensure PhysicsSystem.removeBody and RenderSystem geometry/material disposal on entity destroy.
+    acceptance:
+      - Create/destroy entities does not grow world/buffer sizes across cycles.
+  - M4: Physics timestep consistency
+    steps:
+      - Remove deltaTime scaling in MovementSystem forces; adopt fixedStep constant.
+    acceptance:
+      - grep guard passes; movement remains consistent across frame rates.
+  - M5: Constants extraction
+    steps:
+      - Move camera/physics/movement tuning values into src/config/* modules.
+      - Optionally enable no-magic-numbers in systems.
+    acceptance:
+      - Systems import constants only; lint is green.
+  - M6: Logging policy
+    steps:
+      - Replace console.log calls with logger util; keep warn/error.
+    acceptance:
+      - no-console rule passes in CI.
+
+appendix:
+  citations:
+    - package.json scripts/deps [package.json:6-16]
+    - tsconfig strictness [tsconfig.json:5-13]
+    - eslint flat config [eslint.config.js:6-31]
+    - vite config [vite.config.ts:5-22]
+    - main boot flow [src/main.ts:11-140]
+    - component files [src/components/index.ts:1-12]
+    - systems: Render [src/systems/RenderSystem.ts:8-107], Camera [src/systems/CameraSystem.ts:8-157], Physics [src/systems/PhysicsSystem.ts:9-144], Movement [src/systems/MovementSystem.ts:10-165]
+    - input duplication [src/systems/MovementSystem.ts:34-81], [src/systems/CameraSystem.ts:35-55]
+    - disposal gaps [src/systems/RenderSystem.ts:99-106]
+    - physics body cleanup hook present but unused globally [src/systems/PhysicsSystem.ts:133-139]
+  rationale:
+    - Rules are chosen to prevent class of issues observed in current code: stringly-typed component contracts, missing cleanup hooks, timestep misuse, resource leaks, input duplication, and magic numbers causing drift.
+
+# End of .roorules

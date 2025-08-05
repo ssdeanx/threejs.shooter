@@ -19,3 +19,13 @@ coverage/
 # Ignore all files in the .gitignore directory
 .kiro/
 .specstory/
+assets/models/targets/fir_tree_01_a_LOD0.001.glb
+assets/models/targets/fir_tree_01_a_LOD0.002.glb
+.gitignore
+assets/models/targets/fir_tree_01_b_LOD0.001.glb
+assets/models/targets/fir_tree_01_b_LOD0.002.glb
+assets/models/targets/fir_tree_01_a_LOD0.glb
+assets/models/targets/fir_tree_01_b_LOD0.glb
+assets/models/targets/fir_tree_01_c_LOD0.001.glb
+assets/models/characters/hyper3d_soldier_character.glb
+assets/

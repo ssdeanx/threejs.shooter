@@ -1,8 +1,15 @@
 {
   "name": "threejs-shooter",
   "version": "1.0.0",
-  "description": "A Fortnite-style third-person shooter built with Three.js and ECS architecture",
+  "description": "A Tactical third-person shooter built with Three.js and ECS architecture",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ssdeanx/threejs-shooter.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ssdeanx/threejs-shooter/issues"
+  },
   "scripts": {
     "dev": "vite --host",
     "build": "tsc && vite build",
@@ -11,14 +18,33 @@
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
-    "three": "^0.178.0",
-    "cannon-es": "^0.20.0"
+    "@eslint-react/ast": "^1.52.3",
+    "@react-three/cannon": "^6.6.0",
+    "@react-three/drei": "^10.6.1",
+    "@react-three/fiber": "^9.3.0",
+    "@react-three/postprocessing": "^3.0.4",
+    "@react-three/rapier": "^2.1.0",
+    "ammo.js": "^0.0.10",
+    "ammojs-typed": "^1.0.6",
+    "cannon-es": "^0.20.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "react-tracked": "^2.0.1",
+    "zustand": "^5.0.7",
+    "zustand-computed": "^2.1.0",
+    "zustand-x": "^6.1.1"
   },
   "devDependencies": {
+    "@eslint-react/core": "^1.52.3",
+    "@eslint-react/shared": "^1.52.3",
+    "@types/react": "^19.1.9",
+    "@types/react-dom": "^19.1.7",
     "@types/three": "^0.179.0",
-    "@typescript-eslint/eslint-plugin": "^8.38.0",
-    "@typescript-eslint/parser": "^8.38.0",
+    "@typescript-eslint/eslint-plugin": "^8.39.0",
+    "@typescript-eslint/parser": "^8.39.0",
+    "@typescript-eslint/typescript-estree": "^8.39.0",
     "eslint": "^9.32.0",
+    "three": "^0.179.1",
     "typescript": "^5.8.3",
     "vite": "^7.0.6"
   },

@@ -6,6 +6,9 @@ import { MovementSystem } from './systems/MovementSystem.js';
 import { CameraSystem } from './systems/CameraSystem.js';
 import { InputSystem } from './systems/InputSystem.js';
 import { SoldierSystem } from './systems/SoldierSystem.js';
+import { CombatSystem } from './systems/CombatSystem.js';
+import { ScoringSystem } from './systems/ScoringSystem.js';
+import { createWeaponComponent, createAimComponent, createScoreComponent } from './components/GameplayComponents.js';
 
 console.log('Three.js Shooter - Starting...');
 
@@ -38,7 +41,7 @@ scene.add(ambientLight);
 
 /**
  * Initialize systems in correct update order:
- * Input -> Movement -> Physics -> Camera -> Render
+ * Input -> Movement -> Physics -> Combat -> Scoring -> Camera -> Render
  */
 const inputSystem = new InputSystem();
 const renderSystem = new RenderSystem(scene, entityManager);
@@ -48,6 +51,8 @@ const physicsSystem = new PhysicsSystem(entityManager, hf);
 const movementSystem = new MovementSystem(entityManager, camera);
 movementSystem.setInputSystem(inputSystem);
 const cameraSystem = new CameraSystem(camera, entityManager, scene);
+const combatSystem = new CombatSystem(entityManager, scene, camera, inputSystem);
+const scoringSystem = new ScoringSystem();
 
 // Connect movement system with physics system
 movementSystem.setPhysicsSystem(physicsSystem);
@@ -56,6 +61,8 @@ movementSystem.setPhysicsSystem(physicsSystem);
 entityManager.registerSystem(inputSystem);
 entityManager.registerSystem(movementSystem);
 entityManager.registerSystem(physicsSystem);
+entityManager.registerSystem(combatSystem);
+entityManager.registerSystem(scoringSystem);
 entityManager.registerSystem(cameraSystem);
 // Soldier system: loads, animates, and updates the rigged character without touching RenderSystem
 const soldierSystem = new SoldierSystem(scene, entityManager);
@@ -101,6 +108,11 @@ entityManager.addComponent(playerEntity, 'PlayerControllerComponent', {
   mouseSensitivity: 0.002
 });
 
+/** Gameplay components on player (weapon, ADS, score) */
+entityManager.addComponent(playerEntity, 'WeaponComponent', createWeaponComponent(25, 10, 30, 100));
+entityManager.addComponent(playerEntity, 'AimComponent', createAimComponent(75, 55, { x: 0, y: 2, z: 5 }, { x: 0.2, y: 1.9, z: 4.2 }, 0.02, 0.005));
+entityManager.addComponent(playerEntity, 'ScoreComponent', createScoreComponent());
+
 // Create camera entity that follows the player
 const cameraEntity = entityManager.createEntity();
 entityManager.addComponent(cameraEntity, 'CameraComponent', {
@@ -111,26 +123,27 @@ entityManager.addComponent(cameraEntity, 'CameraComponent', {
   offset: { x: 0, y: 2, z: 5 }
 });
 
-// Create physics cubes that will fall
+/** Create basic target cubes with health to shoot */
 for (let i = 0; i < 3; i++) {
   const cubeEntity = entityManager.createEntity();
-  entityManager.addComponent(cubeEntity, 'PositionComponent', { 
-    x: (i - 1) * 2, 
-    y: 5 + i, 
-    z: -3 
+  entityManager.addComponent(cubeEntity, 'PositionComponent', {
+    x: (i - 1) * 2,
+    y: 5 + i,
+    z: -3
   });
   entityManager.addComponent(cubeEntity, 'RotationComponent', { x: 0, y: 0, z: 0, w: 1 });
-  entityManager.addComponent(cubeEntity, 'MeshComponent', { 
-    meshId: 'cube', 
-    materialId: `cubeMaterial${i}`, 
-    visible: true 
+  entityManager.addComponent(cubeEntity, 'MeshComponent', {
+    meshId: 'cube',
+    materialId: `cubeMaterial${i}`,
+    visible: true
   });
-  entityManager.addComponent(cubeEntity, 'RigidBodyComponent', { 
-    bodyId: 0, 
-    mass: 1, 
-    isKinematic: false 
+  entityManager.addComponent(cubeEntity, 'RigidBodyComponent', {
+    bodyId: 0,
+    mass: 1,
+    isKinematic: false
   });
   entityManager.addComponent(cubeEntity, 'VelocityComponent', { x: 0, y: 0, z: 0 });
+  entityManager.addComponent(cubeEntity, 'HealthComponent', { current: 50, maximum: 50 });
 }
 
 // Set camera position

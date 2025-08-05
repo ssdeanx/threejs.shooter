@@ -45,9 +45,12 @@ scene.add(ambientLight);
  */
 const inputSystem = new InputSystem();
 const renderSystem = new RenderSystem(scene, entityManager);
-// Pass typed heightfield into physics system (no globals, no any)
+/**
+ * Initialize Rapier-based PhysicsSystem and await WASM init.
+ * Pass typed heightfield from RenderSystem.
+ */
 const hf: TerrainHeightfield | null = renderSystem.getHeightfield();
-const physicsSystem = new PhysicsSystem(entityManager, hf);
+const physicsSystem = new PhysicsSystem(entityManager);
 const movementSystem = new MovementSystem(entityManager, camera);
 movementSystem.setInputSystem(inputSystem);
 const cameraSystem = new CameraSystem(camera, entityManager, scene);
@@ -95,10 +98,19 @@ entityManager.addComponent(playerEntity, 'MeshComponent', {
   materialId: 'playerMaterial', 
   visible: true
 });
+/**
+ * Rapier-aligned RigidBodyComponent fields:
+ * kind: 'dynamic' | 'kinematicVelocity' | 'kinematicPosition' | 'fixed'
+ * optional: linearDamping, angularDamping, gravityScale, canSleep, ccd, lockRot
+ */
 entityManager.addComponent(playerEntity, 'RigidBodyComponent', {
-  bodyId: 0,
-  mass: 1,
-  isKinematic: true
+  kind: 'kinematicVelocity',
+  linearDamping: 0.0,
+  angularDamping: 0.0,
+  gravityScale: 1,
+  canSleep: true,
+  ccd: false,
+  lockRot: true
 });
 entityManager.addComponent(playerEntity, 'VelocityComponent', { x: 0, y: 0, z: 0 });
 entityManager.addComponent(playerEntity, 'PlayerControllerComponent', {
@@ -138,9 +150,12 @@ for (let i = 0; i < 3; i++) {
     visible: true
   });
   entityManager.addComponent(cubeEntity, 'RigidBodyComponent', {
-    bodyId: 0,
-    mass: 1,
-    isKinematic: false
+    kind: 'dynamic',
+    linearDamping: 0.15,
+    angularDamping: 0.2,
+    gravityScale: 1,
+    canSleep: true,
+    ccd: false
   });
   entityManager.addComponent(cubeEntity, 'VelocityComponent', { x: 0, y: 0, z: 0 });
   entityManager.addComponent(cubeEntity, 'HealthComponent', { current: 50, maximum: 50 });
@@ -157,21 +172,46 @@ window.addEventListener('resize', () => {
     renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-// Game loop with ECS integration
-let lastTime = 0;
-function animate(currentTime: number) {
-    requestAnimationFrame(animate);
-    
-    const deltaTime = (currentTime - lastTime) / 1000;
-    lastTime = currentTime;
+/**
+ * Game loop with fixed-step accumulator to keep physics deterministic.
+ * Order (approx): Input → Movement → Physics → Combat → Scoring → Camera → Render
+ * entityManager.updateSystems(deltaTime) maintains registration order; we provide a fixed dt to stabilize physics.
+ */
+const FIXED_DT = 1 / 60;
+let accumulator = 0;
+// Safe perfNow wrapper to avoid ESLint no-undef across environments
+const perfNow: () => number =
+  (typeof window !== 'undefined' && 'performance' in window && typeof window.performance?.now === 'function')
+    ? () => window.performance.now()
+    : () => Date.now();
+let lastTime = perfNow();
 
-    // Update all ECS systems
-    entityManager.updateSystems(deltaTime);
+async function start() {
+  // Await Rapier init before starting the loop
+  await physicsSystem.init(hf ?? null);
 
-    // Render the scene
+  const frame = () => {
+    requestAnimationFrame(frame);
+
+    // Accumulate time
+    const now = perfNow();
+    const dt = (now - lastTime) / 1000;
+    lastTime = now;
+    accumulator += dt;
+
+    // Step physics and other systems at fixed rate
+    while (accumulator >= FIXED_DT) {
+      entityManager.updateSystems(FIXED_DT);
+      accumulator -= FIXED_DT;
+    }
+
+    // Render scene (no interpolation for now)
     renderer.render(scene, camera);
+  };
+
+  requestAnimationFrame(frame);
 }
 
-animate(0);
+void start();
 
 console.log('Three.js game loaded successfully!');

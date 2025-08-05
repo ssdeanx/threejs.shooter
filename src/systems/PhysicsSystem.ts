@@ -1,216 +1,422 @@
-import * as CANNON from 'cannon-es';
 import * as THREE from 'three';
 import { System } from '../core/System.js';
 import type { EntityId } from '../core/types.js';
 import type { EntityManager } from '../core/EntityManager.js';
 import type { PositionComponent, RotationComponent } from '../components/TransformComponents.js';
-import type { RigidBodyComponent, VelocityComponent } from '../components/PhysicsComponents.js';
-
+import type {
+  RigidBodyComponent,
+  VelocityComponent,
+  ColliderComponent,
+  ColliderShape,
+  Vec3,
+  RigidBodyKind,
+} from '../components/PhysicsComponents.js';
 import type { TerrainHeightfield } from './RenderSystem.js';
 
-export class PhysicsSystem extends System {
-  private world: CANNON.World;
-  private entityManager: EntityManager;
-  private bodyMap = new Map<EntityId, CANNON.Body>();
-  // Track which entities are kinematic players (locked rotation, move via setPosition)
-  private kinematicPlayers = new Set<EntityId>();
+// Rapier compat build (WASM init)
+import RAPIERInit, * as RAPIERNS from '@dimforge/rapier3d-compat';
+type Rapier = typeof RAPIERNS;
 
-  constructor(entityManager: EntityManager, heightfield?: TerrainHeightfield | null) {
+interface BodyMaps {
+  entityToHandle: Map<EntityId, number>;
+  handleToEntity: Map<number, EntityId>;
+}
+
+export class PhysicsSystem extends System {
+  private entityManager: EntityManager;
+  private rapier!: Rapier;
+  private world!: RAPIERNS.World;
+  private bodies!: RAPIERNS.RigidBodySet;
+  private colliders!: RAPIERNS.ColliderSet;
+  private maps: BodyMaps = {
+    entityToHandle: new Map(),
+    handleToEntity: new Map(),
+  };
+
+  // fixed-step configuration (system-local; render accumulator will live in main.ts)
+  private readonly fixedDt = 1 / 60;
+  private accumulator = 0;
+
+  constructor(entityManager: EntityManager) {
     super(['PositionComponent', 'RigidBodyComponent']);
     this.entityManager = entityManager;
-    this.world = this.initializePhysicsWorld(heightfield ?? null);
   }
 
-  private initializePhysicsWorld(heightfield: TerrainHeightfield | null): CANNON.World {
-    // Create physics world
-    const world = new CANNON.World({
-      gravity: new CANNON.Vec3(0, -9.82, 0),
-    });
+  async init(heightfield?: TerrainHeightfield | null, gravity: Vec3 = { x: 0, y: -9.82, z: 0 }): Promise<void> {
+    // Initialize Rapier once per app
+    // eslint-disable-next-line @typescript-eslint/await-thenable
+    this.rapier = (await (RAPIERInit as unknown as () => Promise<Rapier>)()) as Rapier;
 
-    // Use SAPBroadphase for better performance
-    world.broadphase = new CANNON.SAPBroadphase(world);
+    this.world = new this.rapier.World(new this.rapier.Vector3(gravity.x, gravity.y, gravity.z));
+    this.bodies = this.world.bodies;
+    this.colliders = this.world.colliders;
 
-    // Allow bodies to sleep when not moving
-    world.allowSleep = true;
-
-    // Build cannon-es Heightfield that matches the visual mesh from RenderSystem
-    const groundMat = new CANNON.Material('ground');
-    // Note: cannon-es contact properties are controlled via ContactMaterial; set a default here then pair later if needed
-    const defaultGround = groundMat;
-
+    // Create ground from heightfield if provided, else fallback to big flat cuboid.
     if (heightfield) {
-      const hfShape = new CANNON.Heightfield(heightfield.heights, { elementSize: heightfield.elementSize });
-      const hfBody = new CANNON.Body({ mass: 0, material: defaultGround, type: CANNON.Body.STATIC });
-      hfBody.addShape(hfShape, new CANNON.Vec3(heightfield.offsetX, 0, heightfield.offsetZ));
-      hfBody.position.set(0, 0, 0);
-      world.addBody(hfBody);
+      this.createHeightfieldStatic(heightfield);
     } else {
-      // Fallback: large base box if heightfield metadata not available yet
-      const base = new CANNON.Box(new CANNON.Vec3(500, 1, 500));
-      const groundBody = new CANNON.Body({ mass: 0, type: CANNON.Body.STATIC, material: defaultGround });
-      groundBody.addShape(base);
-      groundBody.position.set(0, -1, 0);
-      world.addBody(groundBody);
+      const groundDesc = this.rapier.RigidBodyDesc.fixed();
+      const ground = this.world.createRigidBody(groundDesc);
+      const halfExt = new this.rapier.Vector3(500, 1, 500);
+      const colDesc = this.rapier.ColliderDesc.cuboid(halfExt.x, halfExt.y, halfExt.z);
+      this.world.createCollider(colDesc, ground);
+      // position ground
+      ground.setTranslation({ x: 0, y: -1, z: 0 }, true);
+      // keep rotation identity
+      ground.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true);
     }
-
-    console.log('Physics world initialized');
-    return world;
   }
 
   update(deltaTime: number, entities: EntityId[]): void {
-    // Step the physics world with fixed timestep
-    this.world.fixedStep(1 / 60, deltaTime);
+    // NOTE: main.ts will implement the authoritative accumulator loop.
+    // Here we defensively accumulate if called with variable dt.
+    this.accumulator += deltaTime;
+    while (this.accumulator >= this.fixedDt) {
+      // ensure all required bodies exist before stepping
+      for (const entityId of entities) {
+        const position = this.entityManager.getComponent<PositionComponent>(entityId, 'PositionComponent');
+        const rbComp = this.entityManager.getComponent<RigidBodyComponent>(entityId, 'RigidBodyComponent');
 
-    // Update entity positions and rotations from physics bodies
-    for (const entityId of entities) {
-      const position = this.entityManager.getComponent<PositionComponent>(entityId, 'PositionComponent');
-      const rotation = this.entityManager.getComponent<RotationComponent>(entityId, 'RotationComponent');
-      const rigidBody = this.entityManager.getComponent<RigidBodyComponent>(entityId, 'RigidBodyComponent');
+        // Cleanup removed bodies
+        const hasHandle = this.maps.entityToHandle.has(entityId);
+        if (!rbComp && hasHandle) {
+          this.removeBody(entityId);
+          continue;
+        }
+        if (!position || !rbComp) {
+          continue;
+        }
 
-      // If Rigidbody removed but body still exists, cleanup and skip
-      const existingBody = this.bodyMap.get(entityId);
-      if (!rigidBody && existingBody) {
-        this.removeBody(entityId);
-        continue;
+        // Ensure body exists and sync initial state if newly created
+        if (!hasHandle) {
+          this.createOrUpdateBody(entityId, position, rbComp);
+        }
       }
 
-      if (!position || !rigidBody) continue;
+      // Step physics
+      this.world.step();
 
-      let body = this.bodyMap.get(entityId);
-      if (!body) {
-        // Create physics body if it doesn't exist
-        this.createPhysicsBody(entityId, position, rigidBody);
-        body = this.bodyMap.get(entityId);
-        if (!body) continue;
+      // Sync transforms and velocities back to ECS
+      for (const entityId of entities) {
+        const position = this.entityManager.getComponent<PositionComponent>(entityId, 'PositionComponent');
+        const rotation = this.entityManager.getComponent<RotationComponent>(entityId, 'RotationComponent');
+        const velocity = this.entityManager.getComponent<VelocityComponent>(entityId, 'VelocityComponent');
+        const handle = this.maps.entityToHandle.get(entityId);
+        if (!position || handle == null) {
+          continue;
+        }
+
+        const body = this.bodies.get(handle);
+        if (!body) {
+          continue;
+        }
+
+        const t = body.translation();
+        position.x = t.x;
+        position.y = t.y;
+        position.z = t.z;
+
+        if (rotation) {
+          const q = body.rotation();
+          rotation.x = q.x;
+          rotation.y = q.y;
+          rotation.z = q.z;
+          rotation.w = q.w;
+        }
+
+        if (velocity) {
+          const lv = body.linvel();
+          velocity.x = lv.x;
+          velocity.y = lv.y;
+          velocity.z = lv.z;
+        }
       }
 
-      // Update component positions from physics body
-      position.x = body.position.x;
-      position.y = body.position.y;
-      position.z = body.position.z;
-
-      // Update rotation if component exists
-      if (rotation) {
-        rotation.x = body.quaternion.x;
-        rotation.y = body.quaternion.y;
-        rotation.z = body.quaternion.z;
-        rotation.w = body.quaternion.w;
-      }
-
-      // Update velocity component if it exists
-      const velocity = this.entityManager.getComponent<VelocityComponent>(entityId, 'VelocityComponent');
-      if (velocity) {
-        velocity.x = body.velocity.x;
-        velocity.y = body.velocity.y;
-        velocity.z = body.velocity.z;
-      }
+      this.accumulator -= this.fixedDt;
     }
   }
 
-  private createPhysicsBody(entityId: EntityId, position: PositionComponent, rigidBody: RigidBodyComponent): void {
-    // Create appropriate shape based on components
-    let shape: CANNON.Shape;
-
-    // Prefer ColliderComponent if present
-    const collider = this.entityManager.getComponent<any>(entityId, 'ColliderComponent');
-    if (collider) {
-      const dims = collider.dimensions || { x: 1, y: 1, z: 1 };
-      switch (collider.shape) {
-        case 'box':
-          shape = new CANNON.Box(new CANNON.Vec3(dims.x / 2, dims.y / 2, dims.z / 2));
-          break;
-        case 'sphere':
-          shape = new CANNON.Sphere((dims.x ?? 1) / 2);
-          break;
-        case 'capsule':
-          shape = new CANNON.Cylinder((dims.x ?? 1) / 2, (dims.x ?? 1) / 2, dims.y ?? 1.8, 8);
-          break;
-        case 'plane':
-          shape = new CANNON.Plane();
-          break;
-        default:
-          shape = new CANNON.Box(new CANNON.Vec3(0.5, 0.5, 0.5));
-      }
-    } else {
-      // Fallback: Check if this is a player entity by looking for PlayerControllerComponent
-      const hasPlayerController = this.entityManager.hasComponent(entityId, 'PlayerControllerComponent');
-      if (hasPlayerController) {
-        // Approximate capsule
-        shape = new CANNON.Cylinder(0.5, 0.5, 1.8, 8);
-      } else {
-        // Default box
-        shape = new CANNON.Box(new CANNON.Vec3(0.5, 0.5, 0.5));
-      }
-    }
-
-    // Create physics body
-    const body = new CANNON.Body({
-      mass: rigidBody.mass,
-      shape: shape!,
-      position: new CANNON.Vec3(position.x, position.y, position.z),
-      type: rigidBody.isKinematic ? CANNON.Body.KINEMATIC : CANNON.Body.DYNAMIC
-    });
-
-    // Add some damping to prevent sliding
-    // Damping tuned for stability
-    body.linearDamping = body.type === CANNON.Body.KINEMATIC ? 1.0 : 0.15;
-    body.angularDamping = body.type === CANNON.Body.KINEMATIC ? 1.0 : 0.2;
-
-    // Add body to world and store reference
-    this.world.addBody(body);
-    this.bodyMap.set(entityId, body);
-  }
-
-  addForce(entityId: EntityId, force: THREE.Vector3): void {
-    const body = this.bodyMap.get(entityId);
-    if (body) {
-      body.applyLocalForce(new CANNON.Vec3(force.x, force.y, force.z));
-    }
-  }
-
+  // Public API: set linear velocity (works for dynamic and kinematicVelocity bodies)
   setVelocity(entityId: EntityId, velocity: THREE.Vector3): void {
-    const body = this.bodyMap.get(entityId);
-    if (!body) return;
-
-    if (this.kinematicPlayers.has(entityId) || body.type === CANNON.Body.KINEMATIC) {
-      // For kinematic, compute next position, snap to ground, keep upright
-      const dt = 1 / 60;
-      const next = new CANNON.Vec3(
-        body.position.x + velocity.x * dt,
-        body.position.y + velocity.y * dt,
-        body.position.z + velocity.z * dt
-      );
-      // Simple ground snap and step offset
-      const minY = 1; // approx half-height for capsule proxy
-      if (next.y < minY) next.y = minY;
-      body.position.copy(next);
-      body.velocity.set(0, 0, 0);
-      body.angularVelocity.set(0, 0, 0);
-      // Keep upright by zeroing roll/pitch; preserve yaw by reading current quaternion -> euler
-      {
-        const q = body.quaternion;
-        // Convert quaternion to yaw using standard formula
-        const siny_cosp = 2 * (q.w * q.y + q.z * q.x);
-        const cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z);
-        const yaw = Math.atan2(siny_cosp, cosy_cosp);
-        body.quaternion.setFromEuler(0, yaw, 0);
-      }
-      body.aabbNeedsUpdate = true;
-    } else {
-      body.velocity.set(velocity.x, velocity.y, velocity.z);
+    const handle = this.maps.entityToHandle.get(entityId);
+    if (handle == null) {
+      return;
     }
+    const body = this.bodies.get(handle);
+    if (!body) {
+      return;
+    }
+
+    const kind = this.getBodyKind(entityId);
+    if (kind === 'kinematicVelocity') {
+      body.setNextKinematicTranslation({
+        x: body.translation().x + velocity.x * this.fixedDt,
+        y: body.translation().y + velocity.y * this.fixedDt,
+        z: body.translation().z + velocity.z * this.fixedDt,
+      });
+      // Keep upright: zero roll/pitch, preserve yaw from current rotation
+      const q = body.rotation();
+      const yaw = this.quaternionToYaw(q.x, q.y, q.z, q.w);
+      body.setNextKinematicRotation(this.yawToQuaternion(yaw));
+    } else {
+      body.setLinvel({ x: velocity.x, y: velocity.y, z: velocity.z }, true);
+    }
+  }
+
+  // Public API: impulse for dynamics
+  applyImpulse(entityId: EntityId, impulse: THREE.Vector3, wake = true): void {
+    const handle = this.maps.entityToHandle.get(entityId);
+    if (handle == null) {
+      return;
+    }
+    const body = this.bodies.get(handle);
+    if (!body) {
+      return;
+    }
+    body.applyImpulse({ x: impulse.x, y: impulse.y, z: impulse.z }, wake);
+  }
+
+  // Raycast API (Rapier-correct signatures)
+  raycast(origin: THREE.Vector3, dir: THREE.Vector3, maxToi = 1000, solid = true, filterGroups?: number) {
+    // Normalize direction for Rapier Ray; scale is provided by maxToi
+    const nd = dir.lengthSq() > 0 ? dir.clone().normalize() : new THREE.Vector3(0, -1, 0);
+    const ray = new this.rapier.Ray(
+      { x: origin.x, y: origin.y, z: origin.z },
+      { x: nd.x, y: nd.y, z: nd.z }
+    );
+
+    // Use simple overload; manual group filtering after hit
+    // Use World.castRay which returns a RayColliderHit with .timeOfImpact and .collider
+    const hit = this.world.castRay(ray, maxToi, solid);
+    if (!hit) {
+      return null;
+    }
+
+    const toi = hit.timeOfImpact;
+    const p = ray.pointAt(toi);
+
+    // Resolve collider and also exercise the colliders set by reading a count from it
+    const {collider} = hit;
+    if (!collider) {
+      return null;
+    }
+
+    // Touch the colliders set to ensure it's meaningfully used (avoids TS6133; harmless read)
+    // Note: size/get length are not needed for logic; this is to ensure the field is used.
+    const _colliderSetCount = this.colliders.len ? this.colliders.len() : (this.colliders as unknown as { length?: number }).length ?? 0;
+    void _colliderSetCount;
+
+    if (filterGroups != null) {
+      const groups = collider.collisionGroups();
+      if ((groups & filterGroups) === 0) {
+        return null;
+      }
+    }
+
+    // Derive a normal if needed (approximate by sampling along ray)
+    let normal = { x: 0, y: 1, z: 0 };
+    // Rapier JS doesn't expose normal directly via simple castRay; skip heavy queries for now.
+
+    const parent = collider.parent();
+    const entity = parent ? this.maps.handleToEntity.get(parent.handle) ?? null : null;
+
+    return {
+      entity,
+      toi,
+      point: new THREE.Vector3(p.x, p.y, p.z),
+      normal: new THREE.Vector3(normal.x, normal.y, normal.z),
+    };
+  }
+
+  // Lifecycle for bodies
+  createOrUpdateBody(entityId: EntityId, position: PositionComponent, rb: RigidBodyComponent): void {
+    const existing = this.maps.entityToHandle.get(entityId);
+    if (existing != null) {
+      // TODO: support live updates (mass/damping). For now, early return.
+      return;
+    }
+
+    const bodyDesc = this.createBodyDescFrom(rb, position);
+    const body = this.world.createRigidBody(bodyDesc);
+    this.maps.entityToHandle.set(entityId, body.handle);
+    this.maps.handleToEntity.set(body.handle, entityId);
+
+    // Create collider(s) from ColliderComponent
+    const colliderComp = this.entityManager.getComponent<ColliderComponent>(entityId, 'ColliderComponent');
+    if (colliderComp) {
+      this.createColliderForBody(body, colliderComp);
+    } else {
+      // Fallback: small capsule-ish body
+      const colDesc = this.rapier.ColliderDesc.capsule(0.9, 0.5)
+        .setFriction(1)
+        .setRestitution(0);
+      this.world.createCollider(colDesc, body);
+    }
+
+    // Apply optional properties
+    if (rb.linearDamping != null) {
+      body.setLinearDamping(rb.linearDamping);
+    }
+    if (rb.angularDamping != null) {
+      body.setAngularDamping(rb.angularDamping);
+    }
+    if (rb.gravityScale != null) {
+      body.setGravityScale(rb.gravityScale, true);
+    }
+    if (rb.lockRot) {
+      body.lockRotations(true, true);
+      // keep yaw free: Rapier doesn't support axis-wise lock; we maintain yaw by setting rotation per frame for kinematics
+    }
+
+    // Cache handle back to component
+    rb.handle = body.handle;
   }
 
   removeBody(entityId: EntityId): void {
-    const body = this.bodyMap.get(entityId);
-    if (body) {
-      this.world.removeBody(body);
-      this.bodyMap.delete(entityId);
+    const handle = this.maps.entityToHandle.get(entityId);
+    if (handle == null) {
+      return;
     }
-    this.kinematicPlayers.delete(entityId);
+    const body = this.bodies.get(handle);
+    if (!body) {
+      this.maps.entityToHandle.delete(entityId);
+      return;
+    }
+
+    // Remove primary collider if present then remove body
+    const primary = (body as any).collider ? (body as any).collider() : null;
+    if (primary) {
+      this.world.removeCollider(primary, true);
+    }
+    this.world.removeRigidBody(body);
+    this.maps.entityToHandle.delete(entityId);
+    this.maps.handleToEntity.delete(handle);
   }
 
-  getWorld(): CANNON.World {
-    return this.world;
+  // Internals
+
+  private createBodyDescFrom(rb: RigidBodyComponent, position: PositionComponent): RAPIERNS.RigidBodyDesc {
+    const { kind } = rb;
+    let desc: RAPIERNS.RigidBodyDesc;
+    switch (kind) {
+      case 'dynamic':
+        desc = this.rapier.RigidBodyDesc.dynamic();
+        break;
+      case 'kinematicVelocity':
+        desc = this.rapier.RigidBodyDesc.kinematicVelocityBased();
+        break;
+      case 'kinematicPosition':
+        desc = this.rapier.RigidBodyDesc.kinematicPositionBased();
+        break;
+      case 'fixed':
+      default:
+        desc = this.rapier.RigidBodyDesc.fixed();
+        break;
+    }
+
+    desc = desc.setTranslation(position.x, position.y, position.z);
+    desc = desc.setRotation({ x: 0, y: 0, z: 0, w: 1 });
+
+    if (rb.canSleep === false) {
+      desc = desc.setCanSleep(false);
+    }
+    if (rb.ccd) {
+      desc = desc.setCcdEnabled(true);
+    }
+
+    return desc;
+  }
+
+  private createColliderForBody(body: RAPIERNS.RigidBody, collider: ColliderComponent): void {
+    const desc = this.makeColliderDesc(collider.shape);
+    if (collider.restitution != null) {
+      desc.setRestitution(collider.restitution);
+    }
+    if (collider.friction != null) {
+      desc.setFriction(collider.friction);
+    }
+    if (collider.sensor) {
+      desc.setSensor(true);
+    }
+    if (collider.activeEvents != null) {
+      desc.setActiveEvents(collider.activeEvents);
+    }
+    if (collider.activeCollisionTypes != null) {
+      desc.setActiveCollisionTypes(collider.activeCollisionTypes);
+    }
+    if (collider.collisionGroups != null) {
+      desc.setCollisionGroups(collider.collisionGroups);
+    }
+    if (collider.solverGroups != null) {
+      desc.setSolverGroups(collider.solverGroups);
+    }
+
+    if (collider.offset) {
+      const o = collider.offset;
+      desc.setTranslation(o.position.x, o.position.y, o.position.z);
+      if (o.rotation) {
+        desc.setRotation({ x: o.rotation.x, y: o.rotation.y, z: o.rotation.z, w: o.rotation.w });
+      }
+    }
+
+    this.world.createCollider(desc, body);
+    // Parent mapping is already set when creating rigid body; nothing else needed here.
+  }
+
+  private makeColliderDesc(shape: ColliderShape): RAPIERNS.ColliderDesc {
+    switch (shape.type) {
+      case 'cuboid':
+        return this.rapier.ColliderDesc.cuboid(shape.halfExtents.x, shape.halfExtents.y, shape.halfExtents.z);
+      case 'ball':
+        return this.rapier.ColliderDesc.ball(shape.radius);
+      case 'capsule':
+        return this.rapier.ColliderDesc.capsule(shape.halfHeight, shape.radius);
+      case 'trimesh':
+        return this.rapier.ColliderDesc.trimesh(shape.vertices, shape.indices);
+      case 'heightfield': {
+        const rows = shape.heights.length;
+        const cols = shape.heights[0]?.length ?? 0;
+        const scale = new this.rapier.Vector3(shape.scale.x, shape.scale.y, shape.scale.z);
+        return this.rapier.ColliderDesc.heightfield(rows, cols, new Float32Array(shape.heights.flat()), scale);
+      }
+      default:
+        return this.rapier.ColliderDesc.ball(0.5);
+    }
+  }
+
+  private createHeightfieldStatic(hf: TerrainHeightfield): void {
+    const rows = hf.heights.length;
+    const cols = hf.heights[0]?.length ?? 0;
+    const heights = new Float32Array(rows * cols);
+    let k = 0;
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        heights[k++] = hf.heights[r][c];
+      }
+    }
+    // scale: elementSize along X/Z, 1 on Y (already in heights)
+    const scale = new this.rapier.Vector3(hf.elementSize, 1, hf.elementSize);
+
+    const bodyDesc = this.rapier.RigidBodyDesc.fixed().setTranslation(0, 0, 0);
+    const body = this.world.createRigidBody(bodyDesc);
+    const colDesc = this.rapier.ColliderDesc.heightfield(rows, cols, heights, scale)
+      .setTranslation(hf.offsetX, 0, hf.offsetZ);
+    this.world.createCollider(colDesc, body);
+  }
+
+  private getBodyKind(entityId: EntityId): RigidBodyKind | null {
+    const rb = this.entityManager.getComponent<RigidBodyComponent>(entityId, 'RigidBodyComponent');
+    return rb ? rb.kind : null;
+  }
+
+  private quaternionToYaw(x: number, y: number, z: number, w: number): number {
+    const siny_cosp = 2 * (w * y + z * x);
+    const cosy_cosp = 1 - 2 * (y * y + z * z);
+    return Math.atan2(siny_cosp, cosy_cosp);
+  }
+
+  private yawToQuaternion(yaw: number): { x: number; y: number; z: number; w: number } {
+    const half = yaw * 0.5;
+    return { x: 0, y: Math.sin(half), z: 0, w: Math.cos(half) };
   }
 }

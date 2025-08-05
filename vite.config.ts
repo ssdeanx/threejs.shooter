@@ -1,10 +1,14 @@
 import { defineConfig } from 'vite';
-import { resolve } from 'path';
+import { resolve } from 'node:path';
+
+// In ESM Vite config, import.meta.url is available; construct a dirname.
+// Use a small helper to avoid TS complaining about URL type.
+const DIRNAME = new URL('.', import.meta.url).pathname;
 
 export default defineConfig({
   resolve: {
     alias: {
-      '@': resolve(__dirname, 'src'),
+      '@': resolve(DIRNAME, 'src'),
     },
   },
   server: {
@@ -18,6 +22,6 @@ export default defineConfig({
     sourcemap: true,
   },
   optimizeDeps: {
-    include: ['three', 'cannon-es'],
+    include: ['three'],
   },
 });

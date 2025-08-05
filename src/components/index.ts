@@ -1,9 +1,32 @@
-// ECS Components exports
+/**
+ * ECS Components barrel
+ * Note: createColliderComponent no longer exists. Prefer specific collider factories.
+ */
 export type { PositionComponent, RotationComponent, ScaleComponent } from './TransformComponents.js';
 export { createPositionComponent, createRotationComponent, createScaleComponent } from './TransformComponents.js';
 
-export type { VelocityComponent, RigidBodyComponent, ColliderComponent } from './PhysicsComponents.js';
-export { createVelocityComponent, createRigidBodyComponent, createColliderComponent } from './PhysicsComponents.js';
+export {
+  createVelocityComponent,
+  createRigidBodyComponent,
+  createCuboidCollider as createColliderComponent,
+  createCuboidCollider,
+  createBallCollider,
+  createCapsuleCollider,
+  createTrimeshCollider,
+  createHeightfieldCollider,
+} from './PhysicsComponents.js';
+
+// Re-export physics types exactly once
+export type {
+  Vec3,
+  VelocityComponent,
+  RigidBodyKind,
+  RigidBodyComponent,
+  ColliderShape,
+  ColliderOffset,
+  ColliderComponent,
+  CharacterControllerComponent,
+} from './PhysicsComponents.js';
 
 export type { HealthComponent, WeaponComponent, PlayerControllerComponent } from './GameplayComponents.js';
 export { createHealthComponent, createWeaponComponent, createPlayerControllerComponent } from './GameplayComponents.js';

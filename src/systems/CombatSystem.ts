@@ -2,24 +2,28 @@ import * as THREE from 'three';
 import { System } from '../core/System.js';
 import type { EntityId } from '../core/types.js';
 import type { EntityManager } from '../core/EntityManager.js';
-import type { PositionComponent } from '../components/TransformComponents.js';
-import type { MeshComponent, CameraComponent } from '../components/RenderingComponents.js';
+import type { CameraComponent } from '../components/RenderingComponents.js';
 import type { HealthComponent, WeaponComponent, AimComponent, ScoreComponent } from '../components/GameplayComponents.js';
 import { InputSystem } from './InputSystem.js';
+import { PhysicsSystem } from './PhysicsSystem.js';
+import { CollisionLayers } from '@/core/CollisionLayers.js';
 
 /**
  * CombatSystem
  * - Requires WeaponComponent to process firing.
  * - Uses active camera direction for hitscan with spread.
  * - Applies ADS by toggling AimComponent.isAiming via RMB and mutating CameraComponent fov/offset.
+ * - Raycast-based hit detection via PhysicsSystem.raycast() with BULLET vs ENEMY|ENV filtering.
  */
 export class CombatSystem extends System {
   private entityManager: EntityManager;
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
   private input: InputSystem;
-  private raycaster = new THREE.Raycaster();
+  private physics: PhysicsSystem | null = null;
   private scratchDir = new THREE.Vector3();
+  // transient hit marker to visualize impact point when a target is hit
+  private hitMarker: THREE.Object3D | null = null;
 
   constructor(entityManager: EntityManager, scene: THREE.Scene, camera: THREE.PerspectiveCamera, input: InputSystem) {
     super(['WeaponComponent']);
@@ -27,6 +31,10 @@ export class CombatSystem extends System {
     this.scene = scene;
     this.camera = camera;
     this.input = input;
+  }
+
+  setPhysicsSystem(physics: PhysicsSystem): void {
+    this.physics = physics;
   }
 
   update(_deltaTime: number, entities: EntityId[]): void {
@@ -47,7 +55,9 @@ export class CombatSystem extends System {
     // Fire (LMB). Respect fireRate / lastFireTime.
     for (const entity of entities) {
       const weapon = this.entityManager.getComponent<WeaponComponent>(entity, 'WeaponComponent');
-      if (!weapon) continue;
+      if (!weapon) {
+        continue;
+      }
 
       const now = Date.now() / 1000;
       const secondsPerShot = 1.0 / Math.max(0.0001, weapon.fireRate);
@@ -63,26 +73,74 @@ export class CombatSystem extends System {
       weapon.lastFireTime = now;
       // weapon.ammo -= 1;
 
-      const hit = this.performHitscan(entity);
+      const hit = this.performHitscan(entity, weapon.range);
       if (hit) {
-        const { targetEntity, point } = hit;
-        const health = this.entityManager.getComponent<HealthComponent>(targetEntity, 'HealthComponent');
-        if (health) {
-          const before = health.current;
-          health.current = Math.max(0, health.current - weapon.damage);
-
-          const score = this.entityManager.getComponent<ScoreComponent>(entity, 'ScoreComponent');
-          if (score) {
-            score.hits += 1;
-            score.score += 10; // +10 per hit
-            if (before > 0 && health.current <= 0) {
-              score.kills += 1;
-              score.score += 50; // +50 per kill
+              const { targetEntity, point, distance } = hit;
+              const health = this.entityManager.getComponent<HealthComponent>(targetEntity, 'HealthComponent');
+              if (health) {
+                const before = health.current;
+      
+                // Distance-based linear falloff
+                const range = Math.max(1, weapon.range ?? 100);
+                const falloff = Math.max(0, 1 - distance / range);
+                const dmg = Math.max(0, weapon.damage * falloff);
+      
+                health.current = Math.max(0, health.current - dmg);
+      
+                const score = this.entityManager.getComponent<ScoreComponent>(entity, 'ScoreComponent');
+                if (score) {
+                  score.hits += 1;
+                  score.score += 10; // +10 per hit
+                  if (before > 0 && health.current <= 0) {
+                    score.kills += 1;
+                    score.score += 50; // +50 per kill
+                  }
+                }
+              }
+      
+              // Place a tiny transient hit marker at the impact point.
+              // Remove previous marker (if any), then add a new one at the impact point.
+              if (this.hitMarker) {
+                this.scene.remove(this.hitMarker);
+                this.hitMarker.traverse(obj => {
+                  const mesh = obj as THREE.Mesh;
+                  if ((mesh as any).geometry) {
+                    (mesh as any).geometry.dispose?.();
+                  }
+                  const mat = (mesh as any).material as THREE.Material | THREE.Material[];
+                  if (Array.isArray(mat)) {
+                    mat.forEach(m => m.dispose?.());
+                  } else {
+                    (mat as THREE.Material)?.dispose?.();
+                  }
+                });
+                this.hitMarker = null;
+              }
+              const markerGeom = new THREE.SphereGeometry(0.06, 8, 8);
+              const markerMat = new THREE.MeshBasicMaterial({ color: 0xff3355 });
+              const marker = new THREE.Mesh(markerGeom, markerMat);
+              marker.position.copy(point);
+              marker.renderOrder = 9999; // ensure visible
+              this.scene.add(marker);
+              this.hitMarker = marker;
+      
             }
-          }
-        }
-        void point; // placeholder for future VFX
-      }
+      else if (this.hitMarker) {
+                this.scene.remove(this.hitMarker);
+                this.hitMarker.traverse(obj => {
+                  const mesh = obj as THREE.Mesh;
+                  if ((mesh as any).geometry) {
+                    (mesh as any).geometry.dispose?.();
+                  }
+                  const mat = (mesh as any).material as THREE.Material | THREE.Material[];
+                  if (Array.isArray(mat)) {
+                    mat.forEach(m => m.dispose?.());
+                  } else {
+                    (mat as THREE.Material)?.dispose?.();
+                  }
+                });
+                this.hitMarker = null;
+              }
     }
   }
 
@@ -90,11 +148,15 @@ export class CombatSystem extends System {
     // Adjust CameraComponent(s) so CameraSystem applies next frame
     const compArrays = this.entityManager.getComponentArrays();
     const cameraArray = compArrays.get('CameraComponent') as (CameraComponent | undefined)[];
-    if (!cameraArray) return;
+    if (!cameraArray) {
+      return;
+    }
 
     for (let i = 0; i < cameraArray.length; i++) {
       const cam = cameraArray[i];
-      if (!cam) continue;
+      if (!cam) {
+        continue;
+      }
       cam.fov = aim.isAiming ? aim.fovAim : aim.fovDefault;
 
       // Shoulder offset nudge
@@ -105,66 +167,39 @@ export class CombatSystem extends System {
     }
   }
 
-  private performHitscan(shooter: EntityId): { targetEntity: EntityId; point: THREE.Vector3 } | null {
+  // Local packer compatible with PhysicsSystem usage (16-bit member | 16-bit mask<<16)
+  private makeGroupsPack(member: number, mask: number): number {
+    return ((member & 0xffff) | ((mask & 0xffff) << 16)) >>> 0;
+  }
+
+  private performHitscan(shooter: EntityId, maxRange = 100): { targetEntity: EntityId; point: THREE.Vector3; distance: number } | null {
+    if (!this.physics) {
+      return null;
+    }
+
     const aim = this.entityManager.getComponent<AimComponent>(shooter, 'AimComponent');
     const spread = aim ? (aim.isAiming ? aim.spreadAim : aim.spreadBase) : 0.02;
 
-    // Camera forward
+    // Camera forward with random spread cone
     const dir = this.scratchDir.set(0, 0, -1).applyQuaternion(this.camera.quaternion).normalize();
     const shotDir = this.randomDirectionInCone(dir, spread);
 
-    this.raycaster.set(this.camera.position, shotDir);
-    this.raycaster.far = 1000;
+    // Filter: BULLET collides with ENEMY | ENV
+    const filterGroups = this.makeGroupsPack(CollisionLayers.BULLET, CollisionLayers.ENEMY | CollisionLayers.ENV);
 
-    // Gather visible meshes
-    const objects: THREE.Object3D[] = [];
-    this.scene.traverse((o) => {
-      const anyO = o as any;
-      if (anyO.isMesh && anyO.visible !== false) objects.push(o);
-    });
-
-    const intersects = this.raycaster.intersectObjects(objects, true);
-    if (intersects.length === 0) return null;
-
-    for (const inter of intersects) {
-      const entity = this.mapObjectToEntity(inter.object);
-      if (entity != null && entity !== shooter) {
-        return { targetEntity: entity, point: inter.point.clone() };
-      }
+    const hit = this.physics.raycast(this.camera.position, shotDir, maxRange, true, filterGroups);
+    if (!hit || hit.entity == null || hit.entity === shooter) {
+      return null;
     }
 
-    return null;
-  }
-
-  private mapObjectToEntity(obj: THREE.Object3D): EntityId | null {
-    // Approximate: find nearest entity Position to intersection object world position
-    const arrays = this.entityManager.getComponentArrays();
-    const meshArray = arrays.get('MeshComponent') as (MeshComponent | undefined)[];
-    if (!meshArray) return null;
-
-    const worldPos = new THREE.Vector3();
-    obj.getWorldPosition(worldPos);
-
-    let bestEntity: EntityId | null = null;
-    let bestDist = Number.POSITIVE_INFINITY;
-
-    for (let entityId = 0; entityId < meshArray.length; entityId++) {
-      const meshComp = meshArray[entityId];
-      if (!meshComp) continue;
-      const pos = this.entityManager.getComponent<PositionComponent>(entityId, 'PositionComponent');
-      if (!pos) continue;
-      const d = worldPos.distanceToSquared(new THREE.Vector3(pos.x, pos.y, pos.z));
-      if (d < bestDist) {
-        bestDist = d;
-        bestEntity = entityId as EntityId;
-      }
-    }
-
-    return bestEntity;
+    const distance = hit.toi;
+    return { targetEntity: hit.entity, point: hit.point.clone(), distance };
   }
 
   private randomDirectionInCone(center: THREE.Vector3, angle: number): THREE.Vector3 {
-    if (angle <= 0) return center.clone();
+    if (angle <= 0) {
+      return center.clone();
+    }
 
     const u = Math.random();
     const v = Math.random();

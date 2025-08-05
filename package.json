@@ -1,6 +1,6 @@
 {
   "name": "threejs-shooter",
-  "version": "1.0.0",
+  "version": "0.2.0",
   "description": "A Tactical third-person shooter built with Three.js and ECS architecture",
   "type": "module",
   "repository": {
@@ -24,7 +24,6 @@
     "@react-three/drei": "^10.6.1",
     "@react-three/fiber": "^9.3.0",
     "@react-three/postprocessing": "^3.0.4",
-    "@react-three/rapier": "^2.1.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "react-tracked": "^2.0.1",

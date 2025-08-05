@@ -30,7 +30,7 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
-// Add lighting
+/** Lighting **/
 const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
 directionalLight.position.set(5, 10, 5);
 directionalLight.castShadow = true;
@@ -59,6 +59,10 @@ const scoringSystem = new ScoringSystem();
 
 // Connect movement system with physics system
 movementSystem.setPhysicsSystem(physicsSystem);
+// Connect camera system with physics system for occlusion queries
+cameraSystem.setPhysicsSystem?.(physicsSystem);
+// Connect combat system with physics system for hitscan queries
+combatSystem.setPhysicsSystem?.(physicsSystem);
 
 // Register systems in update order
 entityManager.registerSystem(inputSystem);
@@ -71,23 +75,21 @@ entityManager.registerSystem(cameraSystem);
 const soldierSystem = new SoldierSystem(scene, entityManager);
 entityManager.registerSystem(soldierSystem);
 
-// Kick off async initialization to load GLBs and start Idle animation with M4A1 attachment
+/** Kick off async initialization to load GLBs and start Idle animation with M4A1 attachment */
 void soldierSystem.init();
 entityManager.registerSystem(renderSystem);
 
 /**
- * Create ground (static Three.js object)
- * Also register as a camera collidable to prevent camera clipping.
+ * Terrain collider entity (binds Rapier heightfield collider to a specific ECS entity)
+ * This allows PhysicsSystem.raycast() to resolve terrain hits to this entity id.
  */
-const groundGeometry = new THREE.PlaneGeometry(50, 50);
-const groundMaterial = new THREE.MeshLambertMaterial({ color: 0x7CFC00 });
-const ground = new THREE.Mesh(groundGeometry, groundMaterial);
-ground.rotation.x = -Math.PI / 2;
-ground.receiveShadow = true;
-scene.add(ground);
-if (typeof (cameraSystem as any).addCollidable === 'function') {
-  (cameraSystem as any).addCollidable(ground);
-}
+const terrainEntity = entityManager.createEntity();
+entityManager.addComponent(terrainEntity, 'PositionComponent', { x: 0, y: 0, z: 0 });
+entityManager.addComponent(terrainEntity, 'RotationComponent', { x: 0, y: 0, z: 0, w: 1 });
+// Lightweight marker so tools/systems can query presence; optional metadata only.
+entityManager.addComponent(terrainEntity, 'TerrainColliderComponent', { kind: 'heightfield', rows: hf?.heights.length, cols: hf ? hf.heights[0]?.length : undefined, cellSize: hf?.elementSize });
+// Bind terrain entity before physics init so the internal heightfield body maps to this entity.
+physicsSystem.setTerrainEntity(terrainEntity);
 
  // Create player entity with physics and movement
 const playerEntity = entityManager.createEntity();

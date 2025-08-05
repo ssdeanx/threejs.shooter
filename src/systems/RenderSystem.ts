@@ -1,9 +1,9 @@
 import * as THREE from 'three';
-import { System } from '../core/System.js';
-import type { EntityId } from '../core/types.js';
-import type { EntityManager } from '../core/EntityManager.js';
-import type { PositionComponent, RotationComponent, ScaleComponent } from '../components/TransformComponents.js';
-import type { MeshComponent } from '../components/RenderingComponents.js';
+import { System } from '@/core/System.js';
+import type { EntityId } from '@/core/types.js';
+import type { EntityManager } from '@/core/EntityManager.js';
+import type { PositionComponent, RotationComponent, ScaleComponent } from '@/components/TransformComponents.js';
+import type { MeshComponent } from '@/components/RenderingComponents.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
 export interface TerrainHeightfield {
@@ -25,6 +25,9 @@ export class RenderSystem extends System {
     private gltfLoader = new GLTFLoader();
 
     private heightfieldData: TerrainHeightfield | null = null;
+
+    // Reusable temporaries to avoid per-frame allocations
+    private _tmpQuat = new THREE.Quaternion();
 
     constructor(scene: THREE.Scene, entityManager: EntityManager) {
         super(['PositionComponent', 'MeshComponent']);
@@ -50,7 +53,9 @@ export class RenderSystem extends System {
         // Remove existing lights if any to avoid duplicates causing bands
         const toRemove: THREE.Object3D[] = [];
         this.scene.traverse((o) => {
-            if ((o as any).isLight) toRemove.push(o);
+            if ((o as any).isLight) {
+              toRemove.push(o);
+            }
         });
         toRemove.forEach(o => this.scene.remove(o));
 
@@ -78,7 +83,7 @@ export class RenderSystem extends System {
         this.scene.add(fill);
     }
 
-    // Create a large displaced ground mesh for visuals and expose heightfield to PhysicsSystem via global scene reference
+    // Create a large displaced ground mesh for visuals and store heightfield locally for PhysicsSystem via getHeightfield()
     private createVisualGround(): void {
         const size = 1000;
         const segments = 128; // friendlier for heightfield grid (rows = cols = segments+1)
@@ -149,7 +154,9 @@ export class RenderSystem extends System {
         // Ensure no accidental surrounding walls: remove any tall planes/boxes tagged as 'wall'
         const toRemove: THREE.Object3D[] = [];
         this.scene.traverse((o) => {
-          if ((o as any).userData?.type === 'wall') toRemove.push(o);
+          if ((o as any).userData?.type === 'wall') {
+            toRemove.push(o);
+          }
         });
         toRemove.forEach(o => this.scene.remove(o));
     }
@@ -161,7 +168,9 @@ export class RenderSystem extends System {
             const rotation = this.entityManager.getComponent<RotationComponent>(entityId, 'RotationComponent');
             const scale = this.entityManager.getComponent<ScaleComponent>(entityId, 'ScaleComponent');
 
-            if (!position || !meshComp) continue;
+            if (!position || !meshComp) {
+              continue;
+            }
 
             let obj = this.entityObject.get(entityId);
 
@@ -173,17 +182,22 @@ export class RenderSystem extends System {
                 }
             }
 
-            if (!obj) continue;
+            if (!obj) {
+              continue;
+            }
 
             // Update position
             obj.position.set(position.x, position.y, position.z);
 
             // Update rotation if available
             if (rotation) {
-                (obj as any).quaternion?.set(rotation.x, rotation.y, rotation.z, rotation.w);
-                if (!(obj as any).quaternion) {
+                const q: THREE.Quaternion | undefined = (obj as any).quaternion;
+                if (q) {
+                    q.set(rotation.x, rotation.y, rotation.z, rotation.w);
+                } else {
                     // fallback for objects without quaternion (rare)
-                    obj.setRotationFromQuaternion(new THREE.Quaternion(rotation.x, rotation.y, rotation.z, rotation.w));
+                    this._tmpQuat.set(rotation.x, rotation.y, rotation.z, rotation.w);
+                    obj.setRotationFromQuaternion(this._tmpQuat);
                 }
             }
 
@@ -217,7 +231,9 @@ export class RenderSystem extends System {
                 'assets/models/characters/soldier.glb',
                 (gltf) => {
                     const root = gltf.scene || gltf.scenes?.[0];
-                    if (!root) return;
+                    if (!root) {
+                      return;
+                    }
 
                     // Shadows
                     root.traverse((o: any) => {
@@ -229,7 +245,9 @@ export class RenderSystem extends System {
 
                     // Replace placeholder content and normalize transform
                     group.name = 'Player_Soldier';
-                    while (group.children.length) group.remove(group.children[0]);
+                    while (group.children.length) {
+                        group.remove(group.children[0]);
+                    }
                     root.position.set(0, 0, 0);
                     root.rotation.set(0, 0, 0);
                     root.scale.set(1, 1, 1);
@@ -249,7 +267,9 @@ export class RenderSystem extends System {
                         'assets/models/weapons/m4a1.glb',
                         (wgltf) => {
                             const weapon = wgltf.scene || wgltf.scenes?.[0];
-                            if (!weapon) return;
+                            if (!weapon) {
+                              return;
+                            }
                             weapon.traverse((o: any) => {
                                 if (o.isMesh) {
                                     o.castShadow = true;
@@ -275,7 +295,9 @@ export class RenderSystem extends System {
                 (err) => {
                     // Soldier failed; fallback to a visible capsule so player isn't invisible
                     console.warn('Soldier GLB load failed, using capsule fallback', err);
-                    while (group.children.length) group.remove(group.children[0]);
+                    while (group.children.length) {
+                        group.remove(group.children[0]);
+                    }
                     const fallback = new THREE.Mesh(
                         new THREE.CapsuleGeometry(0.5, 1.8, 4, 8),
                         new THREE.MeshLambertMaterial({ color: 0x5555ff })
@@ -328,7 +350,9 @@ export class RenderSystem extends System {
     private findObjectByNames(root: THREE.Object3D, names: string[]): THREE.Object3D | null {
         let found: THREE.Object3D | null = null;
         root.traverse((obj) => {
-            if (found) return;
+            if (found) {
+              return;
+            }
             if (obj.name && names.includes(obj.name)) {
                 found = obj;
             }

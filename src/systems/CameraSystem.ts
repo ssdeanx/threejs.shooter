@@ -4,15 +4,28 @@ import type { EntityId } from '../core/types.js';
 import type { EntityManager } from '../core/EntityManager.js';
 import type { PositionComponent } from '../components/TransformComponents.js';
 import type { CameraComponent } from '../components/RenderingComponents.js';
+import { CollisionLayers } from '@/core/CollisionLayers.js';
+import type { PhysicsSystem } from '@/systems/PhysicsSystem.js';
 
 export class CameraSystem extends System {
   private camera: THREE.PerspectiveCamera;
   private entityManager: EntityManager;
   private scene: THREE.Scene;
-  private raycaster = new THREE.Raycaster();
+  // Physics-driven occlusion (replaces Three.Raycaster)
+  private physicsSystem: PhysicsSystem | null = null;
+
+  // Reusable temps to avoid per-frame allocation
+  private _tmpA = new THREE.Vector3();
+  private _tmpB = new THREE.Vector3();
+  private _tmpC = new THREE.Vector3();
+  private _adjusted = new THREE.Vector3();
+
   private currentPosition = new THREE.Vector3();
   private targetPosition = new THREE.Vector3();
-  private smoothingFactor = 0.1;
+
+  // Deterministic smoothing: k is stiffness; alpha = 1 - exp(-k * dt) clamped [0,1]
+  private _smoothK = 8.0;
+
   private mouseX = 0;
   private mouseY = 0;
   private cameraDistance = 5;
@@ -24,14 +37,18 @@ export class CameraSystem extends System {
   private minVerticalAngle = -Math.PI / 3; // -60 degrees
   private maxVerticalAngle = Math.PI / 3;  // 60 degrees
   private minCameraDistance = 1; // Minimum distance from player
-  // Optimized collision set
-  private collidables = new Set<THREE.Object3D>();
 
   constructor(camera: THREE.PerspectiveCamera, entityManager: EntityManager, scene: THREE.Scene) {
     super(['CameraComponent']);
     this.camera = camera;
     this.entityManager = entityManager;
     this.scene = scene;
+
+    // Ensure the managed camera is attached to the scene exactly once
+    if (this.scene && this.camera && this.camera.parent !== this.scene) {
+      this.scene.add(this.camera);
+    }
+
     this.setupMouseControls();
   }
 
@@ -59,41 +76,48 @@ export class CameraSystem extends System {
   }
 
   update(deltaTime: number, entities: EntityId[]): void {
+    // deterministic per-tick smoothing factor derived from dt
+    const alpha = Math.max(0, Math.min(1, 1 - Math.exp(-this._smoothK * deltaTime)));
+
     for (const entityId of entities) {
       const cameraComp = this.entityManager.getComponent<CameraComponent>(entityId, 'CameraComponent');
 
-      if (!cameraComp || !cameraComp.target) continue;
+      if (!cameraComp || !cameraComp.target) {
+        continue;
+      }
 
       // Get target entity position
-      const targetPosition = this.entityManager.getComponent<PositionComponent>(cameraComp.target, 'PositionComponent');
+      const tpos = this.entityManager.getComponent<PositionComponent>(cameraComp.target, 'PositionComponent');
 
-      if (!targetPosition) continue;
+      if (!tpos) {
+        continue;
+      }
 
-      // Calculate camera position based on mouse angles
-      const targetPos = new THREE.Vector3(targetPosition.x, targetPosition.y + this.cameraHeight, targetPosition.z);
+      // Calculate camera position based on mouse angles (no allocations)
+      this._tmpA.set(tpos.x, tpos.y + this.cameraHeight, tpos.z);
 
       // Calculate camera offset based on angles
-      const cameraOffset = new THREE.Vector3(
+      this._tmpB.set(
         Math.sin(this.horizontalAngle) * this.cameraDistance * Math.cos(this.verticalAngle),
         Math.sin(this.verticalAngle) * this.cameraDistance,
         Math.cos(this.horizontalAngle) * this.cameraDistance * Math.cos(this.verticalAngle)
       );
 
       // Set target camera position
-      this.targetPosition.copy(targetPos).add(cameraOffset);
+      this.targetPosition.copy(this._tmpA).add(this._tmpB);
 
-      // Check for camera collision and adjust position
-      const adjustedPosition = this.checkCameraCollision(targetPos, this.targetPosition);
+      // Check for camera collision and adjust position (writes into _adjusted)
+      const adjustedPosition = this.checkCameraCollision(this._tmpA, this.targetPosition);
 
-      // Smooth camera movement using deltaTime
+      // Smooth camera movement using deterministic alpha
       this.currentPosition.copy(this.camera.position);
-      this.currentPosition.lerp(adjustedPosition, this.smoothingFactor * deltaTime * 60);
+      this.currentPosition.lerp(adjustedPosition, alpha);
 
       // Update camera position
       this.camera.position.copy(this.currentPosition);
 
       // Make camera look at target
-      this.camera.lookAt(targetPos.x, targetPos.y, targetPos.z);
+      this.camera.lookAt(this._tmpA.x, this._tmpA.y, this._tmpA.z);
 
       // Update camera properties
       if (this.camera.fov !== cameraComp.fov) {
@@ -114,51 +138,62 @@ export class CameraSystem extends System {
   }
 
   private checkCameraCollision(playerPos: THREE.Vector3, desiredCameraPos: THREE.Vector3): THREE.Vector3 {
-    // Calculate direction from player to desired camera position
-    const direction = new THREE.Vector3().subVectors(desiredCameraPos, playerPos);
-    const distance = direction.length();
-    direction.normalize();
+    // direction = desired - player
+    this._tmpC.copy(desiredCameraPos).sub(playerPos);
+    const len = this._tmpC.length();
+    const distance = Math.max(len, this.minCameraDistance);
 
-    // Set up raycaster from player position towards camera
-    this.raycaster.set(playerPos, direction);
-    this.raycaster.far = distance;
-
-    // Use maintained collidable set instead of per-frame traversal
-    const intersectableObjects: THREE.Object3D[] = Array.from(this.collidables).filter(
-      (o) => (o as any).visible !== false
-    );
-
-    // Check for intersections
-    const intersections = this.raycaster.intersectObjects(intersectableObjects, false);
-
-    if (intersections.length > 0) {
-      // Find the closest intersection
-      const closestIntersection = intersections[0];
-      const intersectionDistance = closestIntersection.distance;
-
-      // Calculate adjusted camera position
-      const adjustedDistance = Math.max(intersectionDistance - 0.5, this.minCameraDistance);
-      const adjustedPosition = new THREE.Vector3()
-        .copy(playerPos)
-        .add(direction.multiplyScalar(adjustedDistance));
-
-      return adjustedPosition;
+    if (distance <= this.minCameraDistance) {
+      // dir = normalized or default forward
+      if (len > 1e-6) {
+        this._tmpC.multiplyScalar(1 / len);
+      } else {
+        this._tmpC.set(0, 0, 1);
+      }
+      this._adjusted.copy(playerPos).addScaledVector(this._tmpC, this.minCameraDistance);
+      return this._adjusted;
     }
 
-    // No collision, return desired position
-    return desiredCameraPos;
+    // dir normalized in _tmpC
+    if (len > 1e-6) {
+      this._tmpC.multiplyScalar(1 / len);
+    } else {
+      this._tmpC.set(0, 0, 1);
+    }
+
+    // If physics available, prefer Rapier-based raycast filtered to CAMERA_BLOCKER
+    if (this.physicsSystem) {
+      const hit = this.physicsSystem.raycast(
+        playerPos,
+        this._tmpC,
+        distance,
+        true,
+        CollisionLayers.CAMERA_BLOCKER
+      );
+
+      if (hit) {
+        // Clamp camera just before the hit point with a small safety margin along the ray
+        const safety = 0.05;
+        const adjustedDistance = Math.max(hit.toi - safety, this.minCameraDistance);
+        this._adjusted.copy(playerPos).addScaledVector(this._tmpC, adjustedDistance);
+        return this._adjusted;
+      }
+    }
+
+    // Fallback: no physics hit; return desired position by copying into _adjusted
+    this._adjusted.copy(desiredCameraPos);
+    return this._adjusted;
   }
 
+  // Keep existing API but map factor [0,1] to stiffness k for deterministic alpha
   setSmoothingFactor(factor: number): void {
-    this.smoothingFactor = Math.max(0, Math.min(1, factor));
+    const clamped = Math.max(0, Math.min(1, factor));
+    // Map [0,1] to a reasonable stiffness range [0,16]; 0 disables smoothing (alpha=0), larger is snappier
+    this._smoothK = clamped * 16.0;
   }
 
-  // Public API to manage collidable objects
-  addCollidable(obj: THREE.Object3D): void {
-    this.collidables.add(obj);
-  }
-
-  removeCollidable(obj: THREE.Object3D): void {
-    this.collidables.delete(obj);
+  // Wire in PhysicsSystem for occlusion raycasts
+  setPhysicsSystem(physics: PhysicsSystem): void {
+    this.physicsSystem = physics;
   }
 }

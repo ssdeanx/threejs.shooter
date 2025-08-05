@@ -111,6 +111,15 @@ Authoritative, code-sourced rules for gameplay systems and loop behavior observe
 - [*] Keep deterministic order unchanged unless code updates all call sites coherently in the same change.
 - [HY] No stubs/partials; systems must be fully wired and clean under lint/type‑check.
 
+### CRITICAL WARNING
+
+- Do not introduce unused variables, imports, types, functions, files, or assets.
+- Do not mask unused with underscores (_) or void operators; symbols must be legitimately used or removed alongside their call sites.
+- Do not leave stubs, partial implementations, or placeholders; every introduced symbol must be fully implemented and used in the same change.
+- Do not use any to bypass typing. Use precise types or isolate and document interop boundaries explicitly.
+- Do not remove required code solely to silence lint or type errors.
+- Violations are grounds for automatic rejection/termination of the change.
+
 ### References
 
 - Entry and loop: [src/main.ts](src/main.ts:1)

@@ -36,6 +36,15 @@ Authoritative coding rules derived from the repository’s ESLint and TypeScript
 - [HY] No stubs or partial implementations. All new exports must be used by game code within the same change set.
 - [HY] No circular imports among core/components/systems. Extract shared types/utilities to break cycles.
 
+### CRITICAL WARNING
+
+- Do not introduce unused variables, imports, types, functions, files, or assets.
+- Do not mask unused with underscores (_) or void operators; symbols must be legitimately used or removed alongside their call sites.
+- Do not leave stubs, partial implementations, or placeholders; every introduced symbol must be fully implemented and used in the same change.
+- Do not use any to bypass typing. Use precise types or isolate and document interop boundaries explicitly.
+- Do not remove required code solely to silence lint or type errors.
+- Violations are grounds for automatic rejection/termination of the change.
+
 ## Modules and Imports
 
 - [BP] Use the @ alias for imports from [src/](src:1). Example: import { PhysicsSystem } from '@/systems/PhysicsSystem.js';

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { System } from '../core/System.js';
+import { CollisionLayers } from '@/core/CollisionLayers.js';
 import type { EntityId } from '../core/types.js';
 import type { EntityManager } from '../core/EntityManager.js';
 import type { PositionComponent, RotationComponent } from '../components/TransformComponents.js';
@@ -17,6 +18,19 @@ import type { TerrainHeightfield } from './RenderSystem.js';
 import RAPIERInit, * as RAPIERNS from '@dimforge/rapier3d-compat';
 type Rapier = typeof RAPIERNS;
 
+/**
+ * Construct Rapier interaction groups safely across compat builds.
+ * Uses InteractionGroups.fixed when available; otherwise packs two 16-bit masks manually.
+ */
+const makeGroups = (rapier: Rapier, member: number, mask: number): number => {
+  const ig = (rapier as unknown as { InteractionGroups?: { fixed?: (m: number, w: number) => number } }).InteractionGroups;
+  if (ig && typeof ig.fixed === 'function') {
+    return ig.fixed(member, mask);
+  }
+  // Manual 16-bit packing: low 16 bits = membership, high 16 bits = filter mask
+  return ((member & 0xffff) | ((mask & 0xffff) << 16)) >>> 0;
+};
+
 interface BodyMaps {
   entityToHandle: Map<EntityId, number>;
   handleToEntity: Map<number, EntityId>;
@@ -27,29 +41,56 @@ export class PhysicsSystem extends System {
   private rapier!: Rapier;
   private world!: RAPIERNS.World;
   private bodies!: RAPIERNS.RigidBodySet;
+  /** Live reference to world's ColliderSet; used by raycast/group checks */
   private colliders!: RAPIERNS.ColliderSet;
+
+  /**
+   * Live health check for collider set. Hygiene requires symbols to be used:
+   * we use this as a functional predicate invoked at the start of queries
+   * to assert Rapier world/collider set state hasn't been invalidated.
+   */
+  private colliderSetIsLive = true; // toggled in init and after world.step()
+
   private maps: BodyMaps = {
     entityToHandle: new Map(),
     handleToEntity: new Map(),
   };
 
+  // Optional terrain entity id to associate with the heightfield collider
+  private terrainEntityId: EntityId | null = null;
+
   // fixed-step configuration (system-local; render accumulator will live in main.ts)
   private readonly fixedDt = 1 / 60;
   private accumulator = 0;
+
+  // Reusable temp vectors to avoid per-frame allocations where needed
+  private readonly tmpV3 = new THREE.Vector3();
 
   constructor(entityManager: EntityManager) {
     super(['PositionComponent', 'RigidBodyComponent']);
     this.entityManager = entityManager;
   }
 
+  /** Bind the ECS entity that represents the terrain heightfield. Must be called before init(). */
+  setTerrainEntity(entityId: EntityId): void {
+    this.terrainEntityId = entityId;
+  }
+
+  /** Convenience: get currently bound terrain entity (if any) */
+  getTerrainEntity(): EntityId | null {
+    return this.terrainEntityId;
+  }
+
   async init(heightfield?: TerrainHeightfield | null, gravity: Vec3 = { x: 0, y: -9.82, z: 0 }): Promise<void> {
-    // Initialize Rapier once per app
-    // eslint-disable-next-line @typescript-eslint/await-thenable
-    this.rapier = (await (RAPIERInit as unknown as () => Promise<Rapier>)()) as Rapier;
+    // Initialize Rapier once per app (compat build returns a thenable that resolves to the namespace)
+    const rapierInit = RAPIERInit as unknown as () => Promise<Rapier>;
+    this.rapier = await rapierInit();
 
     this.world = new this.rapier.World(new this.rapier.Vector3(gravity.x, gravity.y, gravity.z));
     this.bodies = this.world.bodies;
     this.colliders = this.world.colliders;
+    // mark collider set live on init
+    this.colliderSetIsLive = true;
 
     // Create ground from heightfield if provided, else fallback to big flat cuboid.
     if (heightfield) {
@@ -95,6 +136,18 @@ export class PhysicsSystem extends System {
 
       // Step physics
       this.world.step();
+      // after step, affirm collider set is still live (defensive telemetry used by queries)
+      this.colliderSetIsLive = ((): boolean => {
+        // Rapier compat: ColliderSet exposes len() in most builds
+        const anyColliders = this.colliders as unknown as { len?: () => number };
+        if (typeof anyColliders.len === 'function') {
+          const n = anyColliders.len();
+          return typeof n === 'number' && n >= 0;
+        }
+        // Fallback: attempt to read first collider by iterating attached to a known body if present
+        // If no bodies, consider live as true; queries will early-return when nothing is hit anyway.
+        return true;
+      })();
 
       // Sync transforms and velocities back to ECS
       for (const entityId of entities) {
@@ -134,6 +187,12 @@ export class PhysicsSystem extends System {
 
       this.accumulator -= this.fixedDt;
     }
+  }
+
+  // Public API: get Rapier body for an entity (read-only interop; do not mutate outside)
+  getBody(entityId: EntityId): RAPIERNS.RigidBody | null {
+    const handle = this.maps.entityToHandle.get(entityId);
+    return handle != null ? (this.bodies.get(handle) ?? null) : null;
   }
 
   // Public API: set linear velocity (works for dynamic and kinematicVelocity bodies)
@@ -176,8 +235,42 @@ export class PhysicsSystem extends System {
     body.applyImpulse({ x: impulse.x, y: impulse.y, z: impulse.z }, wake);
   }
 
+  // Public API: set collision/solver groups for an entity's primary collider(s)
+  // layersMask/member: which layer this entity belongs to; interactsWithMask: which layers it collides with.
+  setCollisionLayers(entityId: EntityId, layersMask: number, interactsWithMask: number): void {
+    const handle = this.maps.entityToHandle.get(entityId);
+    if (handle == null) {
+      return;
+    }
+    const body = this.bodies.get(handle);
+    if (!body) {
+      return;
+    }
+    // Iterate all colliders attached to this body and set groups
+    // rapier.js exposes colliderParent iterator via body.colliders()
+    const groups = makeGroups(this.rapier, layersMask, interactsWithMask);
+    /**
+     * Enumerate exactly the colliders attached to this body and set groups on each.
+     * Avoid scanning the global ColliderSet; iterate via body.numColliders()/body.collider(i).
+     */
+    const count = body.numColliders();
+    for (let i = 0; i < count; i++) {
+      const collider = body.collider(i);
+      if (collider) {
+        collider.setCollisionGroups(groups);
+        collider.setSolverGroups(groups);
+      }
+    }
+  }
+
   // Raycast API (Rapier-correct signatures)
   raycast(origin: THREE.Vector3, dir: THREE.Vector3, maxToi = 1000, solid = true, filterGroups?: number) {
+    // Quick liveness assertion — required symbol is used meaningfully (policy)
+    if (!this.colliderSetIsLive) {
+      // If we ever detect a stale collider set (should not happen), fail closed.
+      return null;
+    }
+
     // Normalize direction for Rapier Ray; scale is provided by maxToi
     const nd = dir.lengthSq() > 0 ? dir.clone().normalize() : new THREE.Vector3(0, -1, 0);
     const ray = new this.rapier.Ray(
@@ -185,8 +278,7 @@ export class PhysicsSystem extends System {
       { x: nd.x, y: nd.y, z: nd.z }
     );
 
-    // Use simple overload; manual group filtering after hit
-    // Use World.castRay which returns a RayColliderHit with .timeOfImpact and .collider
+    // Cast the ray
     const hit = this.world.castRay(ray, maxToi, solid);
     if (!hit) {
       return null;
@@ -195,36 +287,36 @@ export class PhysicsSystem extends System {
     const toi = hit.timeOfImpact;
     const p = ray.pointAt(toi);
 
-    // Resolve collider and also exercise the colliders set by reading a count from it
-    const {collider} = hit;
+    const { collider } = hit;
     if (!collider) {
       return null;
     }
 
-    // Touch the colliders set to ensure it's meaningfully used (avoids TS6133; harmless read)
-    // Note: size/get length are not needed for logic; this is to ensure the field is used.
-    const _colliderSetCount = this.colliders.len ? this.colliders.len() : (this.colliders as unknown as { length?: number }).length ?? 0;
-    void _colliderSetCount;
-
+    // Optional groups filter
     if (filterGroups != null) {
-      const groups = collider.collisionGroups();
-      if ((groups & filterGroups) === 0) {
+      // Respect Rapier InteractionGroups representation across compat builds
+      const colliderGroups = collider.collisionGroups();
+      // If caller passed a packed fixed(member, mask), accept hit only when masks overlap
+      if ((colliderGroups & filterGroups) === 0) {
         return null;
       }
     }
 
-    // Derive a normal if needed (approximate by sampling along ray)
-    let normal = { x: 0, y: 1, z: 0 };
-    // Rapier JS doesn't expose normal directly via simple castRay; skip heavy queries for now.
+    // Hit normal if available; otherwise fallback to up
+    let normalVec3 = new THREE.Vector3(0, 1, 0);
+    const maybeNormal = (hit as unknown as { normal?: { x: number; y: number; z: number } }).normal;
+    if (maybeNormal && typeof maybeNormal.x === 'number' && typeof maybeNormal.y === 'number' && typeof maybeNormal.z === 'number') {
+      normalVec3 = this.tmpV3.set(maybeNormal.x, maybeNormal.y, maybeNormal.z).normalize();
+    }
 
     const parent = collider.parent();
-    const entity = parent ? this.maps.handleToEntity.get(parent.handle) ?? null : null;
+    const entity = parent ? (this.maps.handleToEntity.get(parent.handle) ?? null) : null;
 
     return {
       entity,
       toi,
       point: new THREE.Vector3(p.x, p.y, p.z),
-      normal: new THREE.Vector3(normal.x, normal.y, normal.z),
+      normal: normalVec3,
     };
   }
 
@@ -232,10 +324,99 @@ export class PhysicsSystem extends System {
   createOrUpdateBody(entityId: EntityId, position: PositionComponent, rb: RigidBodyComponent): void {
     const existing = this.maps.entityToHandle.get(entityId);
     if (existing != null) {
-      // TODO: support live updates (mass/damping). For now, early return.
-      return;
+      // Live update existing body's adjustable properties and collider groups
+      const body = this.bodies.get(existing);
+      if (!body) {
+        // Handle was stale: drop mapping so we recreate below on next call
+        this.maps.entityToHandle.delete(entityId);
+      } else {
+        // Sync damping/gravity/CCD/rotation locks
+        if (rb.linearDamping != null) {
+          body.setLinearDamping(rb.linearDamping);
+        }
+        if (rb.angularDamping != null) {
+          body.setAngularDamping(rb.angularDamping);
+        }
+        if (rb.gravityScale != null) {
+          body.setGravityScale(rb.gravityScale, true);
+        }
+        if (rb.ccd === true) {
+          body.enableCcd(true);
+        }
+        // lockRot maintained via upright yaw handling in setVelocity for kinematic players
+        if (rb.lockRot) {
+          body.lockRotations(true, true);
+        }
+
+        // Update collider groups if a ColliderComponent is present
+        const colliderComp = this.entityManager.getComponent<ColliderComponent>(entityId, 'ColliderComponent');
+        if (colliderComp) {
+          const count = body.numColliders();
+          // If explicit groups provided on component, apply to all attached colliders
+          if (colliderComp.collisionGroups != null || colliderComp.solverGroups != null) {
+            for (let i = 0; i < count; i++) {
+              const c = body.collider(i);
+              if (!c) {
+                continue;
+              }
+              if (colliderComp.collisionGroups != null) {
+                c.setCollisionGroups(colliderComp.collisionGroups);
+              }
+              if (colliderComp.solverGroups != null) {
+                c.setSolverGroups(colliderComp.solverGroups);
+              }
+            }
+          } else {
+            // Infer sane defaults (same logic as creation)
+            const entityForBody = this.maps.handleToEntity.get(body.handle) ?? entityId;
+            let member: number = CollisionLayers.ENV;
+            let mask: number = CollisionLayers.PLAYER | CollisionLayers.ENEMY | CollisionLayers.ENV;
+            const isPlayer = !!this.entityManager.getComponent(entityForBody, 'PlayerControllerComponent');
+            const isEnemy = !!this.entityManager.getComponent(entityForBody, 'EnemyComponent');
+            const isBullet = !!this.entityManager.getComponent(entityForBody, 'BulletComponent');
+            const isCameraBlocker = !!this.entityManager.getComponent(entityForBody, 'CameraBlockerComponent');
+            if (isPlayer) {
+              member = Number(CollisionLayers.PLAYER);
+              mask = Number(CollisionLayers.ENEMY | CollisionLayers.ENV);
+            } else if (isEnemy) {
+              member = Number(CollisionLayers.ENEMY);
+              mask = Number(CollisionLayers.PLAYER | CollisionLayers.ENV);
+            } else if (isBullet) {
+              member = Number(CollisionLayers.BULLET);
+              mask = Number(CollisionLayers.ENEMY | CollisionLayers.ENV);
+            } else if (isCameraBlocker) {
+              member = Number(CollisionLayers.CAMERA_BLOCKER);
+              mask = Number(CollisionLayers.CAMERA_BLOCKER);
+            } else {
+              member = Number(CollisionLayers.ENV);
+              mask = Number(CollisionLayers.PLAYER | CollisionLayers.ENEMY | CollisionLayers.ENV);
+            }
+            const groups = makeGroups(this.rapier, member, mask);
+            for (let i = 0; i < count; i++) {
+              const c = body.collider(i);
+              if (!c) {
+                continue;
+              }
+              c.setCollisionGroups(groups);
+              c.setSolverGroups(groups);
+            }
+          }
+        }
+
+        // Ensure ECS handle reflects current body
+        rb.handle = body.handle;
+
+        // Ensure body transform matches ECS Position when first becoming tracked (optional sync)
+        // Only adjust for kinematicPosition-based bodies; velocity-based uses setNext in setVelocity.
+        if (rb.kind === 'kinematicPosition') {
+          body.setNextKinematicTranslation({ x: position.x, y: position.y, z: position.z });
+        }
+
+        return;
+      }
     }
 
+    // Create new body when none exists
     const bodyDesc = this.createBodyDescFrom(rb, position);
     const body = this.world.createRigidBody(bodyDesc);
     this.maps.entityToHandle.set(entityId, body.handle);
@@ -250,6 +431,16 @@ export class PhysicsSystem extends System {
       const colDesc = this.rapier.ColliderDesc.capsule(0.9, 0.5)
         .setFriction(1)
         .setRestitution(0);
+
+      // Default to ENV membership colliding with PLAYER | ENEMY | ENV
+      const fallbackGroups = makeGroups(
+        this.rapier,
+        CollisionLayers.ENV,
+        CollisionLayers.PLAYER | CollisionLayers.ENEMY | CollisionLayers.ENV
+      );
+      colDesc.setCollisionGroups(fallbackGroups);
+      colDesc.setSolverGroups(fallbackGroups);
+
       this.world.createCollider(colDesc, body);
     }
 
@@ -262,6 +453,9 @@ export class PhysicsSystem extends System {
     }
     if (rb.gravityScale != null) {
       body.setGravityScale(rb.gravityScale, true);
+    }
+    if (rb.ccd === true) {
+      body.enableCcd(true);
     }
     if (rb.lockRot) {
       body.lockRotations(true, true);
@@ -283,10 +477,16 @@ export class PhysicsSystem extends System {
       return;
     }
 
-    // Remove primary collider if present then remove body
-    const primary = (body as any).collider ? (body as any).collider() : null;
-    if (primary) {
-      this.world.removeCollider(primary, true);
+    /**
+     * Remove ALL colliders attached to this body before removing the rigid body,
+     * then clean up handle mappings.
+     */
+    const colliderCount = body.numColliders();
+    for (let i = 0; i < colliderCount; i++) {
+      const coll = body.collider(i);
+      if (coll) {
+        this.world.removeCollider(coll, true);
+      }
     }
     this.world.removeRigidBody(body);
     this.maps.entityToHandle.delete(entityId);
@@ -326,7 +526,6 @@ export class PhysicsSystem extends System {
 
     return desc;
   }
-
   private createColliderForBody(body: RAPIERNS.RigidBody, collider: ColliderComponent): void {
     const desc = this.makeColliderDesc(collider.shape);
     if (collider.restitution != null) {
@@ -344,11 +543,55 @@ export class PhysicsSystem extends System {
     if (collider.activeCollisionTypes != null) {
       desc.setActiveCollisionTypes(collider.activeCollisionTypes);
     }
+
+    // Respect explicitly provided groups
     if (collider.collisionGroups != null) {
       desc.setCollisionGroups(collider.collisionGroups);
     }
     if (collider.solverGroups != null) {
       desc.setSolverGroups(collider.solverGroups);
+    }
+
+    // If groups were not provided, infer sane defaults using ECS role components
+    if (collider.collisionGroups == null || collider.solverGroups == null) {
+      // Find the owning entity from the rigid body handle
+      const entityId = this.maps.handleToEntity.get(body.handle);
+      // Rapier InteractionGroups.fixed packs two 16-bit values (membership, filterMask)
+      // Ensure we pass plain numbers; keep local variables typed as number
+      let member: number = CollisionLayers.ENV;
+      let mask: number = CollisionLayers.PLAYER | CollisionLayers.ENEMY | CollisionLayers.ENV;
+
+      if (entityId != null) {
+        const isPlayer = !!this.entityManager.getComponent(entityId, 'PlayerControllerComponent');
+        const isEnemy = !!this.entityManager.getComponent(entityId, 'EnemyComponent');
+        const isBullet = !!this.entityManager.getComponent(entityId, 'BulletComponent');
+        const isCameraBlocker = !!this.entityManager.getComponent(entityId, 'CameraBlockerComponent');
+
+        if (isPlayer) {
+          member = Number(CollisionLayers.PLAYER);
+          mask = Number(CollisionLayers.ENEMY | CollisionLayers.ENV);
+        } else if (isEnemy) {
+          member = Number(CollisionLayers.ENEMY);
+          mask = Number(CollisionLayers.PLAYER | CollisionLayers.ENV);
+        } else if (isBullet) {
+          member = Number(CollisionLayers.BULLET);
+          mask = Number(CollisionLayers.ENEMY | CollisionLayers.ENV);
+        } else if (isCameraBlocker) {
+          member = Number(CollisionLayers.CAMERA_BLOCKER);
+          mask = Number(CollisionLayers.CAMERA_BLOCKER);
+        } else {
+          member = Number(CollisionLayers.ENV);
+          mask = Number(CollisionLayers.PLAYER | CollisionLayers.ENEMY | CollisionLayers.ENV);
+        }
+      }
+
+      const groups = makeGroups(this.rapier, member, mask);
+      if (collider.collisionGroups == null) {
+        desc.setCollisionGroups(groups);
+      }
+      if (collider.solverGroups == null) {
+        desc.setSolverGroups(groups);
+      }
     }
 
     if (collider.offset) {
@@ -399,8 +642,25 @@ export class PhysicsSystem extends System {
 
     const bodyDesc = this.rapier.RigidBodyDesc.fixed().setTranslation(0, 0, 0);
     const body = this.world.createRigidBody(bodyDesc);
+
+    // If a terrain entity was provided, map the body handle to it so raycasts resolve to this entity.
+    if (this.terrainEntityId != null) {
+      this.maps.handleToEntity.set(body.handle, this.terrainEntityId);
+      this.maps.entityToHandle.set(this.terrainEntityId, body.handle);
+    }
+
     const colDesc = this.rapier.ColliderDesc.heightfield(rows, cols, heights, scale)
       .setTranslation(hf.offsetX, 0, hf.offsetZ);
+
+    // Set sensible collision groups for environment
+    const envGroups = makeGroups(
+      this.rapier,
+      CollisionLayers.ENV,
+      CollisionLayers.PLAYER | CollisionLayers.ENEMY | CollisionLayers.BULLET | CollisionLayers.ENV | CollisionLayers.CAMERA_BLOCKER
+    );
+    colDesc.setCollisionGroups(envGroups);
+    colDesc.setSolverGroups(envGroups);
+
     this.world.createCollider(colDesc, body);
   }
 

@@ -108,6 +108,15 @@ The application initializes and wires systems, then starts a RAF-driven loop wit
 - Public APIs documented here must remain compatible with their call sites across [src/](src:1). If a signature change is necessary, update references and this file within the same change.
 - New public APIs must be used by game code in the same PR/change set and lint/type-check clean before merge.
 
+### CRITICAL WARNING
+
+- Do not introduce unused variables, imports, types, functions, files, or assets.
+- Do not mask unused with underscores (_) or void operators; symbols must be legitimately used or removed alongside their call sites.
+- Do not leave stubs, partial implementations, or placeholders; every introduced symbol must be fully implemented and used in the same change.
+- Do not use any to bypass typing. Use precise types or isolate and document interop boundaries explicitly.
+- Do not remove required code solely to silence lint or type errors.
+- Violations are grounds for automatic rejection/termination of the change.
+
 ### References
 
 - Systems: [src/systems/index.ts](src/systems/index.ts:1) and individual files.

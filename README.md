@@ -249,6 +249,31 @@ const hit = physicsSystem.raycast(playerPos, camDir, maxToi, true /*solid*/, /*f
 if (hit) camera.position.copy(hit.point); // clamp camera to hit point
 ```
 
+```mermaid
+flowchart TD
+    A[InputSystem] --> B[MovementSystem]
+    B --> C[PhysicsSystem]
+    C --> D[CombatSystem]
+    D --> E[ScoringSystem]
+    E --> F[CameraSystem]
+    F --> G[RenderSystem]
+    G --> H[Three.js Scene]
+    subgraph ECS
+      A
+      B
+      C
+      D
+      E
+      F
+      G
+    end
+    subgraph Assets/GLB
+      I[SoldierSystem]
+    end
+    I --> G
+
+```
+
 ---
 
 ## Roadmap Graph
@@ -258,29 +283,44 @@ Legend: ✅ done, 🚧 in-progress, 🎯 planned, 🔒 policy/process gate.
 
 ```mermaid
 graph TD
-  subgraph Core
-    A[ECS Deterministic Loop ✅] --> B[Rapier PhysicsSystem ✅]
-    B --> C[Raycast API ✅]
-    B --> D[Collision Layers 🔒]
-  end
+  %% Core Foundations
+  A[ECS Deterministic Loop ✅] --> B[Rapier PhysicsSystem ✅]
+  B --> C[Raycast API ✅]
+  B --> D[Collision Layers & Masks 🔒]
+  D --> I[Camera Blockers 🎯]
+  C --> K[Hitscan via Raycast 🎯]
 
-  subgraph Gameplay
-    E[Movement System 🚧] --> F[Ground Check (Raycast) 🎯]
-    E --> G[Kinematic/Dynamic Control 🎯]
-    H[Camera System 🚧] --> I[Camera Blockers via Layers 🎯]
-    J[Combat System 🚧] --> K[Hitscan via Raycast 🎯]
-  end
+  %% Gameplay
+  E[Movement System 🚧] --> F[Ground Check (Raycast) 🎯]
+  E --> G[Kinematic/Dynamic Control 🎯]
+  H[Camera System 🚧] --> I
+  J[Combat System 🚧] --> K
 
-  D --> I
-  C --> K
-  A --> E
-  A --> H
-  A --> J
+  %% Hygiene/Policy
+  P[Zero-Unused & Zero-Lint ✅]
+  Q[MCP Planning for Masks 🔒] --> D
 
-  subgraph Hygiene/Policy
-    P[Zero-Unused & Zero-Lint ✅]
-    Q[MCP Planning for Masks 🔒] --> D
-  end
+  %% Integration & Content
+  L[Perf Pass & Temp Reuse 🟣]
+  M[Lint/Types Zero-Warn 🟣]
+  N[Map/Level Art Pass 🟣]
+  O[Animations/Polish 🟣]
+  R[Playtest/QA 🟣]
+
+  %% Future Scope
+  S[Netcode/Multiplayer 🟤]
+  T[Cosmetics/Progression 🟤]
+  U[Modding/Workshop 🟤]
+
+  %% Dependencies
+  F --> H
+  F --> J
+  G --> J
+  N --> O
+  O --> R
+  R --> S
+  S --> T
+  T --> U
 ```
 
 ---
@@ -294,10 +334,10 @@ Emojis: 🟢 active, 🟡 queued, 🔵 dependency, 🔒 policy.
 ```mermaid
 gantt
     dateFormat  WW
-    title Tactical 3P Team Shooter — P1/P2 Implementation Plan
+    title Tactical 3P Team Shooter — Long-Term Roadmap
     excludes weekends
 
-    section Core
+    section Core Foundations
     Rapier Core (done)           :done,    rp_core, 01, 1w
     Fixed-Step Loop (done)       :done,    loop,    01, 1w
     Raycast API (done)           :done,    rcast,   01, 1w
@@ -306,7 +346,7 @@ gantt
     MCP Mask Planning 🔒         :active,  masks,   02, 1w
     Implement Layers/Masks       :         implm,   after masks, 1w
 
-    section P1 Gameplay
+    section P1 Gameplay (Core Loop)
     Movement: Ground Check 🟢    :active,  move1,   02, 1w
     Movement: Control Model      :         move2,   after move1, 1w
     Camera: Obstruction 🟡       :         cam1,    03, 1w
@@ -316,10 +356,21 @@ gantt
     Perf Pass & Temp Reuse 🔵    :         perf1,   03, 1w
     Lint/Types Zero-Warn 🔵      :         hy1,     03, 1w
 
-    section P2+ Tactical 3P Scope
+    section P2 Tactical Features
     Teams/Rounds/Spawns 🟡       :         p2teams, 05, 2w
-    Weapons/ADS/Recoil 🟡        :         p2weap,  05, 2w
-    AI Squads (offline) 🟡       :         p2ai,    07, 2w
+    Weapons/ADS/Recoil 🟡        :         p2weap,  after p2teams, 2w
+    AI Squads (offline) 🟡       :         p2ai,    after p2weap, 2w
+
+    section P3 Content & Polish
+    Map/Level Art Pass 🟣        :         p3map,   09, 3w
+    Animations/Polish 🟣         :         p3anim,  after p3map, 2w
+    Playtest/QA 🟣               :         p3qa,    after p3anim, 2w
+
+    section Future Scope
+    Netcode/Multiplayer 🟤       :         p4net,   15, 4w
+    Cosmetics/Progression 🟤     :         p4cos,   after p4net, 3w
+    Modding/Workshop 🟤          :         p4mod,   after p4cos, 3w
+
 ```
 
 Notes

@@ -4,12 +4,16 @@ import type { EntityId } from '../core/types.js';
 import type { EntityManager } from '../core/EntityManager.js';
 import type { PositionComponent } from '../components/TransformComponents.js';
 import type { CameraComponent } from '../components/RenderingComponents.js';
+import { CollisionLayers } from '@/core/CollisionLayers.js';
+import type { PhysicsSystem } from '@/systems/PhysicsSystem.js';
 
 export class CameraSystem extends System {
   private camera: THREE.PerspectiveCamera;
   private entityManager: EntityManager;
   private scene: THREE.Scene;
-  private raycaster = new THREE.Raycaster();
+  // Physics-driven occlusion (replaces Three.Raycaster)
+  private physicsSystem: PhysicsSystem | null = null;
+
   private currentPosition = new THREE.Vector3();
   private targetPosition = new THREE.Vector3();
   private smoothingFactor = 0.1;
@@ -24,8 +28,6 @@ export class CameraSystem extends System {
   private minVerticalAngle = -Math.PI / 3; // -60 degrees
   private maxVerticalAngle = Math.PI / 3;  // 60 degrees
   private minCameraDistance = 1; // Minimum distance from player
-  // Optimized collision set
-  private collidables = new Set<THREE.Object3D>();
 
   constructor(camera: THREE.PerspectiveCamera, entityManager: EntityManager, scene: THREE.Scene) {
     super(['CameraComponent']);
@@ -116,36 +118,33 @@ export class CameraSystem extends System {
   private checkCameraCollision(playerPos: THREE.Vector3, desiredCameraPos: THREE.Vector3): THREE.Vector3 {
     // Calculate direction from player to desired camera position
     const direction = new THREE.Vector3().subVectors(desiredCameraPos, playerPos);
-    const distance = direction.length();
-    direction.normalize();
+    const distance = Math.max(direction.length(), this.minCameraDistance);
+    if (distance <= this.minCameraDistance) {
+      // Too close to meaningfully test; keep desired within min distance
+      const dir = direction.lengthSq() > 0 ? direction.clone().normalize() : new THREE.Vector3(0, 0, 1);
+      return new THREE.Vector3().copy(playerPos).add(dir.multiplyScalar(this.minCameraDistance));
+    }
+    const dir = direction.clone().normalize();
 
-    // Set up raycaster from player position towards camera
-    this.raycaster.set(playerPos, direction);
-    this.raycaster.far = distance;
+    // If physics available, prefer Rapier-based raycast filtered to CAMERA_BLOCKER
+    if (this.physicsSystem) {
+      const hit = this.physicsSystem.raycast(
+        playerPos,
+        dir,
+        distance,
+        true,
+        CollisionLayers.CAMERA_BLOCKER
+      );
 
-    // Use maintained collidable set instead of per-frame traversal
-    const intersectableObjects: THREE.Object3D[] = Array.from(this.collidables).filter(
-      (o) => (o as any).visible !== false
-    );
-
-    // Check for intersections
-    const intersections = this.raycaster.intersectObjects(intersectableObjects, false);
-
-    if (intersections.length > 0) {
-      // Find the closest intersection
-      const closestIntersection = intersections[0];
-      const intersectionDistance = closestIntersection.distance;
-
-      // Calculate adjusted camera position
-      const adjustedDistance = Math.max(intersectionDistance - 0.5, this.minCameraDistance);
-      const adjustedPosition = new THREE.Vector3()
-        .copy(playerPos)
-        .add(direction.multiplyScalar(adjustedDistance));
-
-      return adjustedPosition;
+      if (hit) {
+        // Clamp camera just before the hit point with a small safety margin along the ray
+        const safety = 0.05;
+        const adjustedDistance = Math.max(hit.toi - safety, this.minCameraDistance);
+        return new THREE.Vector3().copy(playerPos).add(dir.multiplyScalar(adjustedDistance));
+      }
     }
 
-    // No collision, return desired position
+    // Fallback: no physics yet; return desired position
     return desiredCameraPos;
   }
 
@@ -153,12 +152,8 @@ export class CameraSystem extends System {
     this.smoothingFactor = Math.max(0, Math.min(1, factor));
   }
 
-  // Public API to manage collidable objects
-  addCollidable(obj: THREE.Object3D): void {
-    this.collidables.add(obj);
-  }
-
-  removeCollidable(obj: THREE.Object3D): void {
-    this.collidables.delete(obj);
+  // Wire in PhysicsSystem for occlusion raycasts
+  setPhysicsSystem(physics: PhysicsSystem): void {
+    this.physicsSystem = physics;
   }
 }

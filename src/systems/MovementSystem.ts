@@ -7,12 +7,35 @@ import type { VelocityComponent, RigidBodyComponent } from '../components/Physic
 import type { PlayerControllerComponent } from '../components/GameplayComponents.js';
 import type { PhysicsSystem } from './PhysicsSystem.js';
 import { InputSystem } from './InputSystem.js';
+import { CollisionLayers } from '@/core/CollisionLayers.js';
 
 export class MovementSystem extends System {
     private entityManager: EntityManager;
     private camera: THREE.PerspectiveCamera;
     private physicsSystem: PhysicsSystem | null = null;
     private input: InputSystem | null = null;
+
+    // Grounding state
+    private grounded = false;
+    private groundNormal = new THREE.Vector3(0, 1, 0);
+    private coyoteTimer = 0;
+
+    // Temps to minimize GC
+    private _tmpDir = new THREE.Vector3();
+    private _tmpRight = new THREE.Vector3();
+    private _move = new THREE.Vector3();
+    private _desiredVel = new THREE.Vector3();
+    private _down = new THREE.Vector3(0, -1, 0);
+    private _origin = new THREE.Vector3();
+    private _offset = new THREE.Vector3();
+    private _projected = new THREE.Vector3();
+
+    // Tunables
+    private readonly probeRadius = 0.35;      // around feet
+    private readonly probeDistance = 0.5;     // max snap distance
+    private readonly groundSnapSpeed = 6.0;   // how strongly to snap
+    private readonly coyoteTime = 0.12;       // grace window after stepping off
+    private readonly airControl = 0.35;       // fraction of ground control in air
 
     constructor(entityManager: EntityManager, camera: THREE.PerspectiveCamera, input?: InputSystem) {
         super(['PositionComponent', 'VelocityComponent', 'PlayerControllerComponent', 'RigidBodyComponent']);
@@ -30,6 +53,9 @@ export class MovementSystem extends System {
     }
 
     update(deltaTime: number, entities: EntityId[]): void {
+        // decay coyote timer
+        this.coyoteTimer = Math.max(0, this.coyoteTimer - deltaTime);
+
         for (const entityId of entities) {
             const position = this.entityManager.getComponent<PositionComponent>(entityId, 'PositionComponent');
             const velocity = this.entityManager.getComponent<VelocityComponent>(entityId, 'VelocityComponent');
@@ -37,20 +63,21 @@ export class MovementSystem extends System {
             const controller = this.entityManager.getComponent<PlayerControllerComponent>(entityId, 'PlayerControllerComponent');
             const rigidBody = this.entityManager.getComponent<RigidBodyComponent>(entityId, 'RigidBodyComponent');
 
-            if (!position || !velocity || !controller || !rigidBody) continue;
+            if (!position || !velocity || !controller || !rigidBody) {
+              continue;
+            }
 
-            // Calculate movement direction relative to camera
-            const cameraDirection = new THREE.Vector3();
-            this.camera.getWorldDirection(cameraDirection);
-            cameraDirection.y = 0; // Remove vertical component
-            cameraDirection.normalize();
+            // 1) Update grounded via five-ray probe against ENV
+            this.updateGrounded(entityId, position);
 
-            const cameraRight = new THREE.Vector3();
-            cameraRight.crossVectors(cameraDirection, new THREE.Vector3(0, 1, 0));
+            // 2) Camera-relative intended move
+            this.camera.getWorldDirection(this._tmpDir);
+            this._tmpDir.y = 0;
+            this._tmpDir.normalize();
 
-            // Calculate movement vector
-            const moveVector = new THREE.Vector3(0, 0, 0);
+            this._tmpRight.crossVectors(this._tmpDir, new THREE.Vector3(0, 1, 0));
 
+            this._move.set(0, 0, 0);
             const forward = this.input?.isActionPressed('moveForward') ?? false;
             const backward = this.input?.isActionPressed('moveBackward') ?? false;
             const left = this.input?.isActionPressed('moveLeft') ?? false;
@@ -58,63 +85,133 @@ export class MovementSystem extends System {
             const sprint = this.input?.isActionPressed('sprint') ?? false;
 
             if (forward) {
-                moveVector.add(cameraDirection);
+              this._move.add(this._tmpDir);
             }
             if (backward) {
-                moveVector.sub(cameraDirection);
+              this._move.sub(this._tmpDir);
             }
             if (left) {
-                moveVector.sub(cameraRight);
+              this._move.sub(this._tmpRight);
             }
             if (right) {
-                moveVector.add(cameraRight);
+              this._move.add(this._tmpRight);
             }
 
-            // Apply horizontal movement using physics forces
-            if (moveVector.length() > 0) {
-                moveVector.normalize();
-                let speed = controller.moveSpeed;
+            let speed = controller.moveSpeed * (sprint ? controller.sprintMultiplier : 1);
 
-                // Apply sprint multiplier
-                if (sprint) {
-                    speed *= controller.sprintMultiplier;
-                }
+            // 3) Project movement onto ground plane when grounded
+            if (this._move.lengthSq() > 0) {
+                            this._move.normalize();
+            
+                            // If grounded, project desired horizontal velocity onto the ground plane to prevent stair/ledge launching
+                            if (this.grounded) {
+                                // desired (horizontal) velocity
+                                this._desiredVel.set(this._move.x * speed, 0, this._move.z * speed);
+                                // project onto plane with groundNormal
+                                // v_proj = v - (v·n) n
+                                const dot = this._desiredVel.dot(this.groundNormal);
+                                this._projected.copy(this._desiredVel).addScaledVector(this.groundNormal, -dot);
+                                this._desiredVel.copy(this._projected);
+                            } else {
+                                // in air: reduced control
+                                this._desiredVel.set(this._move.x * speed * this.airControl, 0, this._move.z * speed * this.airControl);
+                            }
+            
+                            if (this.physicsSystem) {
+                                this.physicsSystem.setVelocity(entityId, this._desiredVel);
+                            }
+            
+                            // 4) Face movement direction (Y-up)
+                            if (rotation) {
+                                const targetAngle = Math.atan2(this._move.x, this._move.z);
+                                const quaternion = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), targetAngle);
+                                rotation.x = quaternion.x; rotation.y = quaternion.y; rotation.z = quaternion.z; rotation.w = quaternion.w;
+                            }
+                        }
+            else if (this.grounded && this.physicsSystem) {
+                                this._desiredVel.set(0, -this.groundSnapSpeed, 0);
+                                this.physicsSystem.setVelocity(entityId, this._desiredVel);
+                            }
 
-                // Kinematic or dynamic: prefer velocity set for controller stability
-                if (this.physicsSystem) {
-                    const desiredVel = new THREE.Vector3(
-                        moveVector.x * speed,
-                        0,
-                        moveVector.z * speed
-                    );
-                    this.physicsSystem.setVelocity(entityId, desiredVel);
-                }
-
-                // Rotate player to face movement direction
-                if (rotation) {
-                    const targetAngle = Math.atan2(moveVector.x, moveVector.z);
-                    const quaternion = new THREE.Quaternion();
-                    quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), targetAngle);
-
-                    rotation.x = quaternion.x;
-                    rotation.y = quaternion.y;
-                    rotation.z = quaternion.z;
-                    rotation.w = quaternion.w;
-                }
-            }
-
-            // Handle jumping (kinematic-friendly): set upward velocity impulse
-            if ((this.input?.isActionPressed('jump') ?? false) && this.isOnGround(velocity)) {
+            // 5) Jump with coyote time
+            const canJump = this.grounded || this.coyoteTimer > 0;
+            if ((this.input?.isActionPressed('jump') ?? false) && canJump) {
                 if (this.physicsSystem) {
                     const jumpVel = new THREE.Vector3(0, controller.jumpForce, 0);
                     this.physicsSystem.setVelocity(entityId, jumpVel);
                 }
+                // leaving ground; reset grounded and coyote
+                this.grounded = false;
+                this.coyoteTimer = 0;
             }
         }
     }
 
-    private isOnGround(velocity: VelocityComponent): boolean {
-        // Simple ground detection - check if vertical velocity is near zero
-        return Math.abs(velocity.y) < 0.5;
+    // Five-ray probe (center + 4 corners) against ENV, updates grounded and groundNormal; starts coyote when leaving ground.
+    private updateGrounded(entityId: EntityId, pos: PositionComponent): void {
+        if (!this.physicsSystem) {
+          return;
+        }
+
+        // Optional: derive a radius from the entity's collider if available; fallback to probeRadius
+        // This "uses" entityId meaningfully and adapts probes to actual body footprint.
+        let effectiveRadius = this.probeRadius;
+        const col = this.entityManager.getComponent<any>(entityId, 'ColliderComponent');
+        if (col && col.shape) {
+            const shape: any = col.shape;
+            if (shape.type === 'capsule') {
+                // Use capsule radius
+                effectiveRadius = typeof shape.radius === 'number' ? shape.radius : effectiveRadius;
+            } else if (shape.type === 'ball') {
+                effectiveRadius = typeof shape.radius === 'number' ? shape.radius : effectiveRadius;
+            } else if (shape.type === 'cuboid' && shape.halfExtents) {
+                // Approximate radius in XZ by max half extent on X/Z
+                const hx = typeof shape.halfExtents.x === 'number' ? shape.halfExtents.x : effectiveRadius;
+                const hz = typeof shape.halfExtents.z === 'number' ? shape.halfExtents.z : effectiveRadius;
+                effectiveRadius = Math.max(hx, hz);
+            }
+        }
+
+        // Base origin slightly above feet to avoid starting inside geometry
+        this._origin.set(pos.x, pos.y + 0.1, pos.z);
+
+        // Ray directions
+        const dir = this._down;
+
+        // Probe points: center and four corners on XZ plane around feet
+        const offsets: THREE.Vector3[] = [
+            new THREE.Vector3(0, 0, 0),
+            new THREE.Vector3(+effectiveRadius, 0, 0),
+            new THREE.Vector3(-effectiveRadius, 0, 0),
+            new THREE.Vector3(0, 0, +effectiveRadius),
+            new THREE.Vector3(0, 0, -effectiveRadius),
+        ];
+
+        let bestHitDist = Number.POSITIVE_INFINITY;
+        let bestNormal = new THREE.Vector3(0, 1, 0);
+        let anyHit = false;
+
+        for (let i = 0; i < offsets.length; i++) {
+            this._offset.copy(this._origin).add(offsets[i]);
+            const hit = this.physicsSystem.raycast(this._offset, dir, this.probeDistance, true, CollisionLayers.ENV);
+            if (hit) {
+                anyHit = true;
+                if (hit.toi < bestHitDist) {
+                    bestHitDist = hit.toi;
+                    bestNormal.copy(hit.normal);
+                }
+            }
+        }
+
+        const wasGrounded = this.grounded;
+        this.grounded = anyHit && bestHitDist <= this.probeDistance;
+        if (this.grounded) {
+            this.groundNormal.copy(bestNormal);
+            // reset coyote when solidly grounded
+            this.coyoteTimer = this.coyoteTime;
+        } else if (wasGrounded && !this.grounded) {
+            // just left ground: start coyote timer countdown (already decays each update)
+            // keep last ground normal for a short while
+        }
     }
 }

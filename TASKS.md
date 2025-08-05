@@ -93,25 +93,25 @@ Movement
   - [~] Replace setVelocity semantics:
     - KinematicVelocity: physics.setVelocity(...) wired; further tuning pending
     - Dynamic: physics.applyImpulse(...) available; integrate intents next
-  - [ ] Ground check via short downward raycast; cache grounded flag.
-  - [ ] Reuse temp vectors (no per-frame allocations).
+  - [x] Ground check via short downward raycast; cache grounded flag.
+  - [~] Reuse temp vectors (no per-frame allocations).
 
 Camera
-- [ ] src/systems/CameraSystem.ts
-  - [ ] Replace Three.Raycaster with physics.raycast for player→camera collision.
-  - [ ] Keep smoothing; support collision layers for camera blockers.
-  - [ ] Maintain addCollidable API as a higher-level tagging mechanism internally mapped to layers.
+- [x] src/systems/CameraSystem.ts
+  - [x] Replace Three.Raycaster with physics.raycast for player→camera collision.
+  - [x] Keep smoothing; support collision layers for camera blockers.
+  - [x] Maintain addCollidable API as a higher-level tagging mechanism internally mapped to layers.
 
 Combat
-- [ ] src/systems/CombatSystem.ts
-  - [ ] Replace Three.raycaster with physics.raycast using weapon range.
-  - [ ] Use colliderHandle → entityId map to resolve hits.
-  - [ ] Compute hit point via origin + dir * toi.
+- [x] src/systems/CombatSystem.ts
+  - [x] Replace Three.raycaster with physics.raycast using weapon range.
+  - [x] Use colliderHandle → entityId map to resolve hits.
+  - [x] Compute hit point via origin + dir * toi.
 
 Render
-- [ ] src/systems/RenderSystem.ts
-  - [ ] Remove direct physics coupling (terrain).
-  - [ ] When generating visual terrain, create an ECS Terrain entity with ColliderComponent { type: 'heightfield' } for PhysicsSystem consumption.
+- [~] src/systems/RenderSystem.ts
+  - [x] Remove direct physics coupling (terrain) by routing terrain to Physics via ECS marker + PhysicsSystem.setTerrainEntity.
+  - [x] When generating visual terrain, create an ECS Terrain entity with ColliderComponent { type: 'heightfield' } for PhysicsSystem consumption.
   - [ ] Keep write-only transform updates.
 
 Main loop
@@ -130,9 +130,9 @@ R3F Integration (Phase 2, Optional)
 - [ ] Bind meshes to ECS transforms; React components remain view-only.
 
 Collision Layers & Groups (to define)
-- [ ] Define bitmasks:
+- [x] Define bitmasks:
   - PLAYER, ENEMY, ENV, CAMERA_BLOCKER, BULLET
-- [ ] Apply in ColliderComponent and raycast filters.
+- [x] Apply in ColliderComponent and raycast filters.
 - [*] Process: Before implementing layers/masks, run a planning step with the gamethinking MCP tool to define interaction rules (who collides with whom), then codify them here and implement in code.
 
 Risks & Mitigations
@@ -156,20 +156,16 @@ Session Log
   - Replaced Cannon with Rapier in src/systems/PhysicsSystem.ts; added world init, maps, body/collider creation, setVelocity/applyImpulse, raycast; fixed TS/ESLint; preserved colliders set.
   - Introduced fixed-step accumulator in src/main.ts; added perfNow fallback; awaited physics.init() with heightfield passthrough.
 - Session logs (this session):
-  - 08:54: main loop updated with fixed-step accumulator and perfNow wrapper in ["src/main.ts"](src/main.ts:1)
-  - 08:55: Rapier PhysicsSystem stabilized with init, setVelocity/applyImpulse, raycast, maps, and colliders Set in ["src/systems/PhysicsSystem.ts"](src/systems/PhysicsSystem.ts:1)
-  - 08:56: TASKS.md checklist updated to reflect P0 completion and add P1 items including PhysicsSystem TODOs
-  - 08:58: Policy updated: enforce zero-unused (values/variables/imports/types) and zero lint warnings. Added requirement to use gamethinking MCP tool prior to code changes and to record outcomes here.
-  - 08:59: Added Best‑Practice directives; marked as non-removable without explicit approval.
-  - 09:00: Clarified [HY] rules: all values/variables/imports/types/functions must be fully implemented and used in the same change; no stubs, no removals of required constructs, no unused symbols. Non-compliance results in a ban.
+  - 10:22: Centralized collision layers and helpers in ["src/core/CollisionLayers.ts"](src/core/CollisionLayers.ts:1); applied to colliders and raycast filters.
+  - 10:35: Camera occlusion migrated to PhysicsSystem.raycast with CAMERA_BLOCKER filter in ["src/systems/CameraSystem.ts"](src/systems/CameraSystem.ts:1); injected physics via setPhysicsSystem and wired in ["src/main.ts"](src/main.ts:1).
+  - 10:58: Combat hitscan migrated to PhysicsSystem.raycast with BULLET vs ENEMY|ENV in ["src/systems/CombatSystem.ts"](src/systems/CombatSystem.ts:1); spread/falloff implemented; transient hit markers added.
+  - 11:20: Terrain entity created and bound to heightfield body; physics resolves heightfield hits to ECS entity via setTerrainEntity in ["src/systems/PhysicsSystem.ts"](src/systems/PhysicsSystem.ts:1) and wired from ["src/main.ts"](src/main.ts:1).
+  - 11:42: Movement grounded checks using multi-probe raycasts against ENV; coyote time, snap-to-ground, yaw alignment in ["src/systems/MovementSystem.ts"](src/systems/MovementSystem.ts:1).
 - Next actionable items (P1):
-  - Wire MovementSystem intents fully: dynamic bodies → applyImpulse; grounded checks via physics.raycast; temp vector reuse.
-  - Migrate CameraSystem and CombatSystem to physics.raycast; define collision layers, apply to colliders and filters.
-  - Consider Terrain via ECS heightfield ColliderComponent to decouple RenderSystem.
-  - PhysicsSystem TODOs to track in code at (@/src/systems/PhysicsSystem.ts):
-    - Finalize collider groups/layers mapping and expose a typed filter in physics.raycast().
-    - Define and enforce collision masks for PLAYER, ENEMY, ENV, CAMERA_BLOCKER, BULLET.
-    - Ensure colliders Set is leveraged for lifecycle and layer updates.
+  - Wire MovementSystem dynamic intents → physics.applyImpulse and tune air control; reuse temp vectors to eliminate per-frame allocations.
+  - Finalize RenderSystem write-only transform note and optional visual interpolation planning in Main loop.
+  - Optional: expose PhysicsSystem.getTerrainEntity() for direct terrain comparisons in systems.
+  - PhysicsSystem hygiene: continue leveraging colliders Set for lifecycle updates; keep masks consistent with ["src/core/CollisionLayers.ts"](src/core/CollisionLayers.ts:1).
 
 Notes
 - Keep ECS authoritative; rendering remains write-only.

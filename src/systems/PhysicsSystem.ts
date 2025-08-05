@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { System } from '../core/System.js';
+import { CollisionLayers } from '@/core/CollisionLayers.js';
 import type { EntityId } from '../core/types.js';
 import type { EntityManager } from '../core/EntityManager.js';
 import type { PositionComponent, RotationComponent } from '../components/TransformComponents.js';
@@ -17,6 +18,13 @@ import type { TerrainHeightfield } from './RenderSystem.js';
 import RAPIERInit, * as RAPIERNS from '@dimforge/rapier3d-compat';
 type Rapier = typeof RAPIERNS;
 
+// Convenience alias for interaction groups (compat build exposes as bit packing helpers)
+const makeGroups = (rapier: Rapier, member: number, mask: number) =>
+  // Fallback to manual pack if InteractionGroups is not present on compat namespace
+  (rapier as any).InteractionGroups?.fixed
+    ? (rapier as any).InteractionGroups.fixed(member, mask)
+    : ((member & 0xffff) | ((mask & 0xffff) << 16));
+
 interface BodyMaps {
   entityToHandle: Map<EntityId, number>;
   handleToEntity: Map<number, EntityId>;
@@ -33,6 +41,9 @@ export class PhysicsSystem extends System {
     handleToEntity: new Map(),
   };
 
+  // Optional terrain entity id to associate with the heightfield collider
+  private terrainEntityId: EntityId | null = null;
+
   // fixed-step configuration (system-local; render accumulator will live in main.ts)
   private readonly fixedDt = 1 / 60;
   private accumulator = 0;
@@ -40,6 +51,11 @@ export class PhysicsSystem extends System {
   constructor(entityManager: EntityManager) {
     super(['PositionComponent', 'RigidBodyComponent']);
     this.entityManager = entityManager;
+  }
+
+  /** Bind the ECS entity that represents the terrain heightfield. Must be called before init(). */
+  setTerrainEntity(entityId: EntityId): void {
+    this.terrainEntityId = entityId;
   }
 
   async init(heightfield?: TerrainHeightfield | null, gravity: Vec3 = { x: 0, y: -9.82, z: 0 }): Promise<void> {
@@ -250,6 +266,16 @@ export class PhysicsSystem extends System {
       const colDesc = this.rapier.ColliderDesc.capsule(0.9, 0.5)
         .setFriction(1)
         .setRestitution(0);
+
+      // Default to ENV membership colliding with PLAYER | ENEMY | ENV
+      const fallbackGroups = makeGroups(
+        this.rapier,
+        CollisionLayers.ENV,
+        CollisionLayers.PLAYER | CollisionLayers.ENEMY | CollisionLayers.ENV
+      );
+      colDesc.setCollisionGroups(fallbackGroups);
+      colDesc.setSolverGroups(fallbackGroups);
+
       this.world.createCollider(colDesc, body);
     }
 
@@ -326,7 +352,6 @@ export class PhysicsSystem extends System {
 
     return desc;
   }
-
   private createColliderForBody(body: RAPIERNS.RigidBody, collider: ColliderComponent): void {
     const desc = this.makeColliderDesc(collider.shape);
     if (collider.restitution != null) {
@@ -344,11 +369,55 @@ export class PhysicsSystem extends System {
     if (collider.activeCollisionTypes != null) {
       desc.setActiveCollisionTypes(collider.activeCollisionTypes);
     }
+
+    // Respect explicitly provided groups
     if (collider.collisionGroups != null) {
       desc.setCollisionGroups(collider.collisionGroups);
     }
     if (collider.solverGroups != null) {
       desc.setSolverGroups(collider.solverGroups);
+    }
+
+    // If groups were not provided, infer sane defaults using ECS role components
+    if (collider.collisionGroups == null || collider.solverGroups == null) {
+      // Find the owning entity from the rigid body handle
+      const entityId = this.maps.handleToEntity.get(body.handle);
+      // Rapier InteractionGroups.fixed packs two 16-bit values (membership, filterMask)
+      // Ensure we pass plain numbers; keep local variables typed as number
+      let member: number = CollisionLayers.ENV;
+      let mask: number = CollisionLayers.PLAYER | CollisionLayers.ENEMY | CollisionLayers.ENV;
+
+      if (entityId != null) {
+        const isPlayer = !!this.entityManager.getComponent(entityId, 'PlayerControllerComponent');
+        const isEnemy = !!this.entityManager.getComponent(entityId, 'EnemyComponent');
+        const isBullet = !!this.entityManager.getComponent(entityId, 'BulletComponent');
+        const isCameraBlocker = !!this.entityManager.getComponent(entityId, 'CameraBlockerComponent');
+
+        if (isPlayer) {
+          member = Number(CollisionLayers.PLAYER);
+          mask = Number(CollisionLayers.ENEMY | CollisionLayers.ENV);
+        } else if (isEnemy) {
+          member = Number(CollisionLayers.ENEMY);
+          mask = Number(CollisionLayers.PLAYER | CollisionLayers.ENV);
+        } else if (isBullet) {
+          member = Number(CollisionLayers.BULLET);
+          mask = Number(CollisionLayers.ENEMY | CollisionLayers.ENV);
+        } else if (isCameraBlocker) {
+          member = Number(CollisionLayers.CAMERA_BLOCKER);
+          mask = Number(CollisionLayers.CAMERA_BLOCKER);
+        } else {
+          member = Number(CollisionLayers.ENV);
+          mask = Number(CollisionLayers.PLAYER | CollisionLayers.ENEMY | CollisionLayers.ENV);
+        }
+      }
+
+      const groups = makeGroups(this.rapier, member, mask);
+      if (collider.collisionGroups == null) {
+        desc.setCollisionGroups(groups);
+      }
+      if (collider.solverGroups == null) {
+        desc.setSolverGroups(groups);
+      }
     }
 
     if (collider.offset) {
@@ -399,8 +468,25 @@ export class PhysicsSystem extends System {
 
     const bodyDesc = this.rapier.RigidBodyDesc.fixed().setTranslation(0, 0, 0);
     const body = this.world.createRigidBody(bodyDesc);
+
+    // If a terrain entity was provided, map the body handle to it so raycasts resolve to this entity.
+    if (this.terrainEntityId != null) {
+      this.maps.handleToEntity.set(body.handle, this.terrainEntityId);
+      this.maps.entityToHandle.set(this.terrainEntityId, body.handle);
+    }
+
     const colDesc = this.rapier.ColliderDesc.heightfield(rows, cols, heights, scale)
       .setTranslation(hf.offsetX, 0, hf.offsetZ);
+
+    // Set sensible collision groups for environment
+    const envGroups = makeGroups(
+      this.rapier,
+      CollisionLayers.ENV,
+      CollisionLayers.PLAYER | CollisionLayers.ENEMY | CollisionLayers.BULLET | CollisionLayers.ENV | CollisionLayers.CAMERA_BLOCKER
+    );
+    colDesc.setCollisionGroups(envGroups);
+    colDesc.setSolverGroups(envGroups);
+
     this.world.createCollider(colDesc, body);
   }
 

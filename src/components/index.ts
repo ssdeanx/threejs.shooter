@@ -33,3 +33,16 @@ export { createHealthComponent, createWeaponComponent, createPlayerControllerCom
 
 export type { MeshComponent, CameraComponent } from './RenderingComponents.js';
 export { createMeshComponent, createCameraComponent } from './RenderingComponents.js';
+
+/** Terrain components */
+export interface TerrainColliderComponent {
+  kind: 'heightfield';
+  /** rows x cols of the height grid for reference/debug; optional at runtime */
+  rows?: number;
+  cols?: number;
+  /** cell size (element size) in world units */
+  cellSize?: number;
+}
+export function createTerrainColliderComponent(rows?: number, cols?: number, cellSize?: number): TerrainColliderComponent {
+  return { kind: 'heightfield', rows, cols, cellSize };
+}

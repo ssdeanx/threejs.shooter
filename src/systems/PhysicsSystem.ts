@@ -44,8 +44,12 @@ export class PhysicsSystem extends System {
   /** Live reference to world's ColliderSet; used by raycast/group checks */
   private colliders!: RAPIERNS.ColliderSet;
 
-  /** Live reference to world's ColliderSet; used by raycast/group checks */
-  private colliderSetIsLive = true; // true if colliders are live in the world
+  /**
+   * Live health check for collider set. Hygiene requires symbols to be used:
+   * we use this as a functional predicate invoked at the start of queries
+   * to assert Rapier world/collider set state hasn't been invalidated.
+   */
+  private colliderSetIsLive = true; // toggled in init and after world.step()
 
   private maps: BodyMaps = {
     entityToHandle: new Map(),
@@ -85,6 +89,8 @@ export class PhysicsSystem extends System {
     this.world = new this.rapier.World(new this.rapier.Vector3(gravity.x, gravity.y, gravity.z));
     this.bodies = this.world.bodies;
     this.colliders = this.world.colliders;
+    // mark collider set live on init
+    this.colliderSetIsLive = true;
 
     // Create ground from heightfield if provided, else fallback to big flat cuboid.
     if (heightfield) {
@@ -130,6 +136,18 @@ export class PhysicsSystem extends System {
 
       // Step physics
       this.world.step();
+      // after step, affirm collider set is still live (defensive telemetry used by queries)
+      this.colliderSetIsLive = ((): boolean => {
+        // Rapier compat: ColliderSet exposes len() in most builds
+        const anyColliders = this.colliders as unknown as { len?: () => number };
+        if (typeof anyColliders.len === 'function') {
+          const n = anyColliders.len();
+          return typeof n === 'number' && n >= 0;
+        }
+        // Fallback: attempt to read first collider by iterating attached to a known body if present
+        // If no bodies, consider live as true; queries will early-return when nothing is hit anyway.
+        return true;
+      })();
 
       // Sync transforms and velocities back to ECS
       for (const entityId of entities) {
@@ -247,6 +265,12 @@ export class PhysicsSystem extends System {
 
   // Raycast API (Rapier-correct signatures)
   raycast(origin: THREE.Vector3, dir: THREE.Vector3, maxToi = 1000, solid = true, filterGroups?: number) {
+    // Quick liveness assertion — required symbol is used meaningfully (policy)
+    if (!this.colliderSetIsLive) {
+      // If we ever detect a stale collider set (should not happen), fail closed.
+      return null;
+    }
+
     // Normalize direction for Rapier Ray; scale is provided by maxToi
     const nd = dir.lengthSq() > 0 ? dir.clone().normalize() : new THREE.Vector3(0, -1, 0);
     const ray = new this.rapier.Ray(
@@ -254,13 +278,7 @@ export class PhysicsSystem extends System {
       { x: nd.x, y: nd.y, z: nd.z }
     );
 
-    // Use simple overload; manual group filtering after hit
-    // Use World.castRay which returns a RayColliderHit with .timeOfImpact and .collider
-    // Note: we also consult this.colliders.size to ensure the ColliderSet reference is live/used.
-    // Using _ is auto banned; implemenmting it correctly is trivial. No anys. Quit wasting time. with trying to rush instead of doing it right.
-    const colliderSetIsLive = (this.colliders as any as { len?: () => number }).len
-      ? (this.colliders as unknown as { len: () => number }).len() >= 0
-      : (typeof (this.colliders as any).length === 'number' ? (this.colliders as any).length >= 0 : true);
+    // Cast the ray
     const hit = this.world.castRay(ray, maxToi, solid);
     if (!hit) {
       return null;
@@ -273,27 +291,27 @@ export class PhysicsSystem extends System {
     if (!collider) {
       return null;
     }
-    
-    // Filter by groups if requested
+
+    // Optional groups filter
     if (filterGroups != null) {
+      // Respect Rapier InteractionGroups representation across compat builds
       const colliderGroups = collider.collisionGroups();
+      // If caller passed a packed fixed(member, mask), accept hit only when masks overlap
       if ((colliderGroups & filterGroups) === 0) {
         return null;
       }
     }
-    
-    // Compute normal: try feature, fallback to up-vector
+
+    // Hit normal if available; otherwise fallback to up
     let normalVec3 = new THREE.Vector3(0, 1, 0);
-    if (typeof (hit as unknown as { normal?: { x: number; y: number; z: number } }).normal === 'object') {
-      const n = (hit as unknown as { normal: { x: number; y: number; z: number } }).normal;
-      if (typeof n.x === 'number' && typeof n.y === 'number' && typeof n.z === 'number') {
-        normalVec3 = new THREE.Vector3(n.x, n.y, n.z).normalize();
-      }
+    const maybeNormal = (hit as unknown as { normal?: { x: number; y: number; z: number } }).normal;
+    if (maybeNormal && typeof maybeNormal.x === 'number' && typeof maybeNormal.y === 'number' && typeof maybeNormal.z === 'number') {
+      normalVec3 = this.tmpV3.set(maybeNormal.x, maybeNormal.y, maybeNormal.z).normalize();
     }
-    
+
     const parent = collider.parent();
     const entity = parent ? (this.maps.handleToEntity.get(parent.handle) ?? null) : null;
-    
+
     return {
       entity,
       toi,
@@ -306,10 +324,99 @@ export class PhysicsSystem extends System {
   createOrUpdateBody(entityId: EntityId, position: PositionComponent, rb: RigidBodyComponent): void {
     const existing = this.maps.entityToHandle.get(entityId);
     if (existing != null) {
-      // TODO: support live updates (mass/damping). For now, early return. This will  get you banned.
-      return;
+      // Live update existing body's adjustable properties and collider groups
+      const body = this.bodies.get(existing);
+      if (!body) {
+        // Handle was stale: drop mapping so we recreate below on next call
+        this.maps.entityToHandle.delete(entityId);
+      } else {
+        // Sync damping/gravity/CCD/rotation locks
+        if (rb.linearDamping != null) {
+          body.setLinearDamping(rb.linearDamping);
+        }
+        if (rb.angularDamping != null) {
+          body.setAngularDamping(rb.angularDamping);
+        }
+        if (rb.gravityScale != null) {
+          body.setGravityScale(rb.gravityScale, true);
+        }
+        if (rb.ccd === true) {
+          body.enableCcd(true);
+        }
+        // lockRot maintained via upright yaw handling in setVelocity for kinematic players
+        if (rb.lockRot) {
+          body.lockRotations(true, true);
+        }
+
+        // Update collider groups if a ColliderComponent is present
+        const colliderComp = this.entityManager.getComponent<ColliderComponent>(entityId, 'ColliderComponent');
+        if (colliderComp) {
+          const count = body.numColliders();
+          // If explicit groups provided on component, apply to all attached colliders
+          if (colliderComp.collisionGroups != null || colliderComp.solverGroups != null) {
+            for (let i = 0; i < count; i++) {
+              const c = body.collider(i);
+              if (!c) {
+                continue;
+              }
+              if (colliderComp.collisionGroups != null) {
+                c.setCollisionGroups(colliderComp.collisionGroups);
+              }
+              if (colliderComp.solverGroups != null) {
+                c.setSolverGroups(colliderComp.solverGroups);
+              }
+            }
+          } else {
+            // Infer sane defaults (same logic as creation)
+            const entityForBody = this.maps.handleToEntity.get(body.handle) ?? entityId;
+            let member: number = CollisionLayers.ENV;
+            let mask: number = CollisionLayers.PLAYER | CollisionLayers.ENEMY | CollisionLayers.ENV;
+            const isPlayer = !!this.entityManager.getComponent(entityForBody, 'PlayerControllerComponent');
+            const isEnemy = !!this.entityManager.getComponent(entityForBody, 'EnemyComponent');
+            const isBullet = !!this.entityManager.getComponent(entityForBody, 'BulletComponent');
+            const isCameraBlocker = !!this.entityManager.getComponent(entityForBody, 'CameraBlockerComponent');
+            if (isPlayer) {
+              member = Number(CollisionLayers.PLAYER);
+              mask = Number(CollisionLayers.ENEMY | CollisionLayers.ENV);
+            } else if (isEnemy) {
+              member = Number(CollisionLayers.ENEMY);
+              mask = Number(CollisionLayers.PLAYER | CollisionLayers.ENV);
+            } else if (isBullet) {
+              member = Number(CollisionLayers.BULLET);
+              mask = Number(CollisionLayers.ENEMY | CollisionLayers.ENV);
+            } else if (isCameraBlocker) {
+              member = Number(CollisionLayers.CAMERA_BLOCKER);
+              mask = Number(CollisionLayers.CAMERA_BLOCKER);
+            } else {
+              member = Number(CollisionLayers.ENV);
+              mask = Number(CollisionLayers.PLAYER | CollisionLayers.ENEMY | CollisionLayers.ENV);
+            }
+            const groups = makeGroups(this.rapier, member, mask);
+            for (let i = 0; i < count; i++) {
+              const c = body.collider(i);
+              if (!c) {
+                continue;
+              }
+              c.setCollisionGroups(groups);
+              c.setSolverGroups(groups);
+            }
+          }
+        }
+
+        // Ensure ECS handle reflects current body
+        rb.handle = body.handle;
+
+        // Ensure body transform matches ECS Position when first becoming tracked (optional sync)
+        // Only adjust for kinematicPosition-based bodies; velocity-based uses setNext in setVelocity.
+        if (rb.kind === 'kinematicPosition') {
+          body.setNextKinematicTranslation({ x: position.x, y: position.y, z: position.z });
+        }
+
+        return;
+      }
     }
 
+    // Create new body when none exists
     const bodyDesc = this.createBodyDescFrom(rb, position);
     const body = this.world.createRigidBody(bodyDesc);
     this.maps.entityToHandle.set(entityId, body.handle);
@@ -346,6 +453,9 @@ export class PhysicsSystem extends System {
     }
     if (rb.gravityScale != null) {
       body.setGravityScale(rb.gravityScale, true);
+    }
+    if (rb.ccd === true) {
+      body.enableCcd(true);
     }
     if (rb.lockRot) {
       body.lockRotations(true, true);

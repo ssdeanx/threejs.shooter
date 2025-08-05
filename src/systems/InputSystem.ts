@@ -306,21 +306,31 @@ export class InputSystem extends System {
   // Input mapping configuration methods
   isActionPressed(action: string): boolean {
     const keys = this.inputConfig.keyMappings[action];
-    if (!keys) return false;
+    if (!keys) {
+      return false;
+    }
 
     return keys.some(key => {
-      if (key === 'Mouse0') return this.inputState.leftClick;
-      if (key === 'Mouse1') return this.inputState.rightClick;
+      if (key === 'Mouse0') {
+        return this.inputState.leftClick;
+      }
+      if (key === 'Mouse1') {
+        return this.inputState.rightClick;
+      }
       return this.keyBuffer.has(key) || this.isKeyCurrentlyPressed(key);
     });
   }
 
   wasActionJustPressed(action: string): boolean {
     const keys = this.inputConfig.keyMappings[action];
-    if (!keys) return false;
+    if (!keys) {
+      return false;
+    }
 
     return keys.some(key => {
-      if (key === 'Mouse0' || key === 'Mouse1') return false; // Mouse handled separately
+      if (key === 'Mouse0' || key === 'Mouse1') {
+        return false;
+      } // Mouse handled separately
       return this.keyBuffer.has(key);
     });
   }

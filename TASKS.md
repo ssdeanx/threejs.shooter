@@ -132,25 +132,70 @@ Combat
   - [x] Compute hit point via origin + dir * toi.
 
 Render
-- [~] src/systems/RenderSystem.ts
+- [x] src/systems/RenderSystem.ts
   - [x] Remove direct physics coupling (terrain) by routing terrain to Physics via ECS marker + PhysicsSystem.setTerrainEntity.
   - [x] When generating visual terrain, create an ECS Terrain entity with ColliderComponent { type: 'heightfield' } for PhysicsSystem consumption.
-  - [ ] Keep write-only transform updates.
+  - [x] Keep write-only transform updates.
 
 Main loop
 - [x] src/main.ts
   - [x] Introduce fixed-step accumulator and canonical order.
   - [x] Await physicsSystem.init() before starting animate.
-  - [ ] Consider interpolation for visuals (optional).
+  - [ ] Optional: interpolation planning (unchanged).
 
 Unchanged or Low Priority
-- [ ] src/systems/SoldierSystem.ts, src/systems/ScoringSystem.ts, src/systems/index.ts
-- [ ] src/components/TransformComponents.ts, RenderingComponents.ts, GameplayComponents.ts
+- [x] src/systems/SoldierSystem.ts, src/systems/ScoringSystem.ts, src/systems/index.ts
+- [x] src/components/TransformComponents.ts, RenderingComponents.ts, GameplayComponents.ts
 
-R3F Integration (Phase 2, Optional)
-- [ ] Move the loop to R3F’s useFrame using the same accumulator.
-- [ ] Keep ECS + Rapier world outside React; no duplicate provider worlds.
-- [ ] Bind meshes to ECS transforms; React components remain view-only.
+Phase 2 — R3F Integration
+
+[*] Dependencies alignment (do not modify package.json in this task)
+- [ ] Confirm these deps are already present in package.json: "@react-three/fiber", "@react-three/drei", "@react-three/postprocessing", "react", "react-dom".
+- [ ] Verify that the core "postprocessing" library is present and version-compatible with "@react-three/postprocessing"; if missing, plan an install step and align versions with three and @react-three/postprocessing before implementation.
+
+- [ ] Adopt R3F for render scheduling
+  - [ ] Introduce <Canvas> in index.html or App, ensure only one renderer.
+  - [ ] Port the RAF render to R3F’s useFrame; maintain accumulator logic (fixedDt=1/60) inside a single orchestrator hook.
+  - [ ] Call RenderSystem.update from the R3F pass without ECS back-writes.
+  - [ ] Ensure exactly one loop/accumulator exists. If migrating fully to R3F, disable the legacy RAF; otherwise keep legacy until parity test passes, then remove the legacy loop in the same change set to avoid dual loops.
+
+- [ ] Postprocessing
+  - [ ] Postprocessing pipeline
+    - [ ] Add "postprocessing" core lib if not present; keep versions compatible with three and @react-three/postprocessing.
+    - [ ] Create a minimal Effects chain using @react-three/postprocessing (e.g., SMAA or FXAA first, then optional Bloom/SSR).
+    - [ ] Ensure effects are view-only and driven from the R3F useFrame render pass; no ECS/physics back-writes and no per-frame allocations.
+    - [ ] Provide feature toggles via a small React config layer (contexts/hooks or component props) without leaking into ECS.
+
+- [ ] ECS/Physics ownership (One World)
+  - [ ] Single authoritative Rapier world managed by ECS/PhysicsSystem; React must not instantiate another physics world/provider.
+  - [ ] Audit any @react-three/rapier usage; ensure it consumes the existing world or is not used.
+  - [ ] Expose read-only hooks/selectors to bridge ECS transforms into React without writes (React is strictly view-only).
+
+- [ ] View binding
+  - [ ] Create minimal React components that bind Scene objects to ECS MeshComponent transforms (read-only).
+  - [ ] Prove no ECS/physics writes from React; only read → Three.js object transforms.
+
+- [ ] Asset loading in React
+  - [ ] Migrate GLB loads to Suspense-friendly hooks while preserving MeshComponent mapping.
+  - [ ] Ensure materials/geometries allocated once; dispose on unmount.
+
+- [ ] Camera in R3F
+  - [ ] Drive camera position/rotation via CameraSystem output; set as default in R3F scene.
+  - [ ] Keep deterministic smoothing; no per-frame allocations; no ECS back-writes.
+
+- [ ] Dev ergonomics & hygiene
+  - [ ] Establish @ alias in React files; no unused imports/vars; no any.
+  - [ ] Add lightweight story/smoke route to verify Three objects match ECS transforms.
+
+Risks & Mitigations (P2 specific)
+- [!] React StrictMode double effects
+  - Mitigation: Guard world init with idempotent flags; avoid side effects in component bodies; isolate to useEffect with stable deps.
+- [!] Duplicate render/physics loops
+  - Mitigation: Single accumulator orchestrator; disable legacy RAF if present.
+- [!] Reconciliation overhead for large scenes
+  - Mitigation: Keep heavy-object creation outside React; reuse Three objects; use keys and memoization.
+- [!] State ownership confusion
+  - Mitigation: Document “React is view-only” in TASKS.md; enforce via lint rule patterns and code review.
 
 Collision Layers & Groups (to define)
 - [x] Define bitmasks:
@@ -174,10 +219,7 @@ Session Log
 
 2025-08-05
 - Plan authored and checklist created.
-- P0 completed this session:
-  - Updated src/components/PhysicsComponents.ts to Rapier schemas.
-  - Replaced Cannon with Rapier in src/systems/PhysicsSystem.ts; added world init, maps, body/collider creation, setVelocity/applyImpulse, raycast; fixed TS/ESLint; preserved colliders set.
-  - Introduced fixed-step accumulator in src/main.ts; added perfNow fallback; awaited physics.init() with heightfield passthrough.
+- Phase 1 completed this session across Components, Physics, Movement, Camera, Combat, Main loop, and Render write-only behavior.
 - Session logs (this session):
   - 10:22: Centralized collision layers and helpers in ["src/core/CollisionLayers.ts"](src/core/CollisionLayers.ts:1); applied to colliders and raycast filters.
   - 10:35: Camera occlusion migrated to PhysicsSystem.raycast with CAMERA_BLOCKER filter in ["src/systems/CameraSystem.ts"](src/systems/CameraSystem.ts:1); injected physics via setPhysicsSystem and wired in ["src/main.ts"](src/main.ts:1).
@@ -186,12 +228,10 @@ Session Log
   - 11:42: Movement grounded checks using multi-probe raycasts against ENV; coyote time, snap-to-ground, yaw alignment in ["src/systems/MovementSystem.ts"](src/systems/MovementSystem.ts:1).
   - 12:05: Movement dynamic intents integrated: kinematic uses setVelocity; dynamic uses applyImpulse; temp vectors consolidated.
   - 12:12: PhysicsSystem convenience APIs added: getBody(), getTerrainEntity(), setCollisionLayers().
-  - 12:05: Movement dynamic intents integrated: kinematic uses setVelocity; dynamic uses applyImpulse; temp vectors consolidated.
-  - 12:12: PhysicsSystem convenience APIs added: getBody(), getTerrainEntity(), setCollisionLayers().
-- Next actionable items (P1):
-  - Finalize RenderSystem write-only transform note and optional visual interpolation planning in Main loop.
-  - Consider exposing small helper in systems to check terrain via TerrainColliderComponent marker when needed.
-  - PhysicsSystem hygiene: continue leveraging colliders Set for lifecycle updates; keep masks consistent with ["src/core/CollisionLayers.ts"](src/core/CollisionLayers.ts:1).
+- Next: Phase 2 planning
+  - R3F Integration tasks authored under “Phase 2 — R3F Integration”.
+  - Interpolation remains optional and will be evaluated during P2 without affecting authoritative simulation.
+- Update: Phase 2 scope expanded to include postprocessing via @react-three/postprocessing with the core "postprocessing" library, and explicit “one-world” enforcement (single authoritative Rapier world managed by ECS/PhysicsSystem; React must not create another world/provider). Render scheduling requires exactly one accumulator/loop; disable legacy RAF when fully migrated to R3F, otherwise remove legacy in the same change set after parity.
 
 Notes
 - Keep ECS authoritative; rendering remains write-only.
@@ -333,8 +373,8 @@ MCP Tools — Auxiliary (Web, NPM, Codacy)
 
 Blender MCP Usage Playbooks (Examples)
 - Texture an imported model:
-  1) blender.search_polyhaven_assets(asset_type="textures", categories="wood") → pick texture_id
-  2) blender.download_polyhaven_asset(asset_id=..., asset_type="textures", resolution="2k")
+  1) blender.search_polyhaven_assets(asset_type="textures", categories="avatar") → pick texture_id
+  2) blender.download_polyhaven_asset(asset_id=..., asset_type="textures", resolution="1k")
   3) blender.set_texture(object_name="Crate_A", texture_id=...)
   4) blender.get_viewport_screenshot() → attach to PR
 - Generate a hero prop via Hyper3D:

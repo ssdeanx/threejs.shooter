@@ -39,6 +39,15 @@ Authoritative project-wide rules derived strictly from the current repository co
 - [HY] All symbols used: Any new component/system/API must be wired into the ECS and used in the same change; no dead exports or unused files.
 - [*] Changes must align with these rules; deviations require explicit approval captured in repository history (e.g., PR description/changelog notes).
 
+### CRITICAL WARNING
+
+- Do not introduce unused variables, imports, types, functions, files, or assets.
+- Do not mask unused with underscores (_) or void operators; symbols must be legitimately used or removed alongside their call sites.
+- Do not leave stubs, partial implementations, or placeholders; every introduced symbol must be fully implemented and used in the same change.
+- Do not use any to bypass typing. Use precise types or isolate and document interop boundaries explicitly.
+- Do not remove required code solely to silence lint or type errors.
+- Violations are grounds for automatic rejection/termination of the change.
+
 ## Content & Assets
 
 - [*] No secrets or private tokens committed. Use local .env files when needed and do not commit production secrets. Static assets ship under [assets/](assets/.gitkeep:1) and are served by Vite from [public/](public/index.html:1) as-is when placed there.

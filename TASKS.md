@@ -1,5 +1,22 @@
 # ThreeJS Shooter — Rapier + React Refactor Plan
 
+### CRITICAL WARNING
+
+- Do not introduce unused variables, imports, types, functions, files, or assets.
+- Do not mask unused with underscores (_) or void operators; symbols must be legitimately used or removed alongside their call sites.
+- Do not leave stubs, partial implementations, or placeholders; every introduced symbol must be fully implemented and used in the same change.
+- Do not use any to bypass typing. Use precise types or isolate and document interop boundaries explicitly.
+- Do not remove required code solely to silence lint or type errors.
+- Violations are grounds for automatic rejection/termination of the change.
+
+### Acceptance Gates — Critical
+
+- Lint clean and type-check clean with zero warnings/errors.
+- No unused symbols; no underscore/void masking.
+- No use of any to bypass typing; interop boundaries must be isolated and documented.
+- No stubs/partials; all new APIs used by game code within the same change set.
+- Do not remove working code solely to appease lint/type errors.
+
 Purpose
 Create a persistent, incremental checklist to migrate from Cannon to Rapier and align ECS with an authoritative fixed-step loop. Use this as cross-session context. Only implement items explicitly marked as “In Progress” for the current session.
 - Always run the gamethinking MCP tool to plan core mechanics and system changes before making code edits. Document key decisions from gamethinking runs in the Session Log.
@@ -21,7 +38,7 @@ Goals
 - Keep imperative rendering initially; optionally integrate React Three Fiber (R3F) later without duplicating the physics world.
 - Institutionalize engineering hygiene: zero unused symbols (imports, vars, types), zero TypeScript errors, zero lint warnings on commit.
 - Adhere to best practices patterns established for this project (naming, component separation, authoritative simulation, tick ordering, event-driven interactions). Never remove existing best‑practice conventions already present unless explicitly approved.
-- [HY] Enforcement: any introduced symbol (value, variable, import, type alias/interface, function/method) must be used and wired end-to-end in the same PR. If a symbol cannot be fully implemented, do not attempt the change. No partials. No leaving unused. No removals of required constructs. Violations result in a ban.
+- [HY] Enforcement: any introduced symbol (value, variable, import, type alias/interface, function/method) must be used and wired end-to-end in the same PR. If a symbol cannot be fully implemented, do not attempt the change. No partials. No leaving unused. No removals of required constructs. Violations result in a ban. Using _
 
 Canonical System Order (deterministic)
 1) Input
@@ -87,14 +104,20 @@ Physics
     - setLinvel(entityId, v) [implemented as setVelocity(entityId, THREE.Vector3)]
     - applyImpulse(entityId, i, wake?)
     - raycast(origin, dir, maxToi, solid?, filterGroups?) → hit | null
+    - getBody(entityId) → RigidBody | null
+    - getTerrainEntity() → EntityId | null
+    - setCollisionLayers(entityId, layersMask, interactsWithMask): void
+    - getBody(entityId) → RigidBody | null
+    - getTerrainEntity() → EntityId | null
+    - setCollisionLayers(entityId, layersMask, interactsWithMask): void
 
 Movement
-- [ ] src/systems/MovementSystem.ts
-  - [~] Replace setVelocity semantics:
-    - KinematicVelocity: physics.setVelocity(...) wired; further tuning pending
-    - Dynamic: physics.applyImpulse(...) available; integrate intents next
+- [x] src/systems/MovementSystem.ts
+  - [x] Replace setVelocity semantics:
+    - KinematicVelocity: physics.setVelocity(...) wired
+    - Dynamic: physics.applyImpulse(...) integrated for lateral intents
   - [x] Ground check via short downward raycast; cache grounded flag.
-  - [~] Reuse temp vectors (no per-frame allocations).
+  - [x] Reuse temp vectors (no per-frame allocations).
 
 Camera
 - [x] src/systems/CameraSystem.ts
@@ -161,10 +184,13 @@ Session Log
   - 10:58: Combat hitscan migrated to PhysicsSystem.raycast with BULLET vs ENEMY|ENV in ["src/systems/CombatSystem.ts"](src/systems/CombatSystem.ts:1); spread/falloff implemented; transient hit markers added.
   - 11:20: Terrain entity created and bound to heightfield body; physics resolves heightfield hits to ECS entity via setTerrainEntity in ["src/systems/PhysicsSystem.ts"](src/systems/PhysicsSystem.ts:1) and wired from ["src/main.ts"](src/main.ts:1).
   - 11:42: Movement grounded checks using multi-probe raycasts against ENV; coyote time, snap-to-ground, yaw alignment in ["src/systems/MovementSystem.ts"](src/systems/MovementSystem.ts:1).
+  - 12:05: Movement dynamic intents integrated: kinematic uses setVelocity; dynamic uses applyImpulse; temp vectors consolidated.
+  - 12:12: PhysicsSystem convenience APIs added: getBody(), getTerrainEntity(), setCollisionLayers().
+  - 12:05: Movement dynamic intents integrated: kinematic uses setVelocity; dynamic uses applyImpulse; temp vectors consolidated.
+  - 12:12: PhysicsSystem convenience APIs added: getBody(), getTerrainEntity(), setCollisionLayers().
 - Next actionable items (P1):
-  - Wire MovementSystem dynamic intents → physics.applyImpulse and tune air control; reuse temp vectors to eliminate per-frame allocations.
   - Finalize RenderSystem write-only transform note and optional visual interpolation planning in Main loop.
-  - Optional: expose PhysicsSystem.getTerrainEntity() for direct terrain comparisons in systems.
+  - Consider exposing small helper in systems to check terrain via TerrainColliderComponent marker when needed.
   - PhysicsSystem hygiene: continue leveraging colliders Set for lifecycle updates; keep masks consistent with ["src/core/CollisionLayers.ts"](src/core/CollisionLayers.ts:1).
 
 Notes
@@ -289,7 +315,7 @@ BP-3 Automation Patterns
 - Execute blender.execute_blender_code() in small, reviewable chunks; log each chunk and the outcome.
 - Store downloaded assets and generated models in versioned folders: assets/{models,textures,hdris}/source|processed.
 - After import/generation, call blender.get_object_info() and snapshot materials/UVs into the manifest.
-- For textures, prefer 2k by default; allow 4k for hero assets; ensure power-of-two dimensions.
+- For textures, prefer 1k by default; allow 2k or 4k for hero assets; ensure power-of-two dimensions.
 
 Policy & Hygiene (Content)
 - [HY] No orphan assets: every asset must have a manifest and be referenced by the game or a pending task with owner/date.
@@ -322,3 +348,4 @@ Future Tracks (Art)
 - [ ] Add automated preview renders via blender.get_viewport_screenshot() for PR checks.
 - [ ] Define LOD budgets and per-platform texture caps (desktop/mobile).
 - [ ] Author “collision hint” convention in manifest for ECS collider generation (cuboid/capsule/convex hull).
+

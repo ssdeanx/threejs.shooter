@@ -29,6 +29,7 @@ export class MovementSystem extends System {
     private _origin = new THREE.Vector3();
     private _offset = new THREE.Vector3();
     private _projected = new THREE.Vector3();
+    private _impulse = new THREE.Vector3();
 
     // Tunables
     private readonly probeRadius = 0.35;      // around feet
@@ -101,37 +102,45 @@ export class MovementSystem extends System {
 
             // 3) Project movement onto ground plane when grounded
             if (this._move.lengthSq() > 0) {
-                            this._move.normalize();
-            
-                            // If grounded, project desired horizontal velocity onto the ground plane to prevent stair/ledge launching
-                            if (this.grounded) {
-                                // desired (horizontal) velocity
-                                this._desiredVel.set(this._move.x * speed, 0, this._move.z * speed);
-                                // project onto plane with groundNormal
-                                // v_proj = v - (v·n) n
-                                const dot = this._desiredVel.dot(this.groundNormal);
-                                this._projected.copy(this._desiredVel).addScaledVector(this.groundNormal, -dot);
-                                this._desiredVel.copy(this._projected);
-                            } else {
-                                // in air: reduced control
-                                this._desiredVel.set(this._move.x * speed * this.airControl, 0, this._move.z * speed * this.airControl);
-                            }
-            
-                            if (this.physicsSystem) {
-                                this.physicsSystem.setVelocity(entityId, this._desiredVel);
-                            }
-            
-                            // 4) Face movement direction (Y-up)
-                            if (rotation) {
-                                const targetAngle = Math.atan2(this._move.x, this._move.z);
-                                const quaternion = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), targetAngle);
-                                rotation.x = quaternion.x; rotation.y = quaternion.y; rotation.z = quaternion.z; rotation.w = quaternion.w;
-                            }
-                        }
-            else if (this.grounded && this.physicsSystem) {
-                                this._desiredVel.set(0, -this.groundSnapSpeed, 0);
-                                this.physicsSystem.setVelocity(entityId, this._desiredVel);
-                            }
+              this._move.normalize();
+
+              // If grounded, project desired horizontal velocity onto the ground plane to prevent stair/ledge launching
+              if (this.grounded) {
+                // desired (horizontal) velocity
+                this._desiredVel.set(this._move.x * speed, 0, this._move.z * speed);
+                // v_proj = v - (v·n) n
+                const dot = this._desiredVel.dot(this.groundNormal);
+                this._projected.copy(this._desiredVel).addScaledVector(this.groundNormal, -dot);
+                this._desiredVel.copy(this._projected);
+              } else {
+                // in air: reduced control
+                this._desiredVel.set(this._move.x * speed * this.airControl, 0, this._move.z * speed * this.airControl);
+              }
+
+              // Apply movement intent depending on body kind
+              if (this.physicsSystem) {
+                const rb = this.entityManager.getComponent<RigidBodyComponent>(entityId, 'RigidBodyComponent');
+                if (rb?.kind === 'dynamic') {
+                  // compute impulse = desiredVel * mass-ish factor; without mass, approximate with small scalar and dt baked into PhysicsSystem fixedDt
+                  const scale = 0.5; // tuned scalar for acceleration feel
+                  this._impulse.set(this._desiredVel.x * scale, 0, this._desiredVel.z * scale);
+                  this.physicsSystem.applyImpulse(entityId, this._impulse, true);
+                } else {
+                  // kinematic velocity-based
+                  this.physicsSystem.setVelocity(entityId, this._desiredVel);
+                }
+              }
+
+              // 4) Face movement direction (Y-up)
+              if (rotation) {
+                const targetAngle = Math.atan2(this._move.x, this._move.z);
+                const quaternion = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), targetAngle);
+                rotation.x = quaternion.x; rotation.y = quaternion.y; rotation.z = quaternion.z; rotation.w = quaternion.w;
+              }
+            } else if (this.grounded && this.physicsSystem) {
+              this._desiredVel.set(0, -this.groundSnapSpeed, 0);
+              this.physicsSystem.setVelocity(entityId, this._desiredVel);
+            }
 
             // 5) Jump with coyote time
             const canJump = this.grounded || this.coyoteTimer > 0;

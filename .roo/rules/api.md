@@ -1,22 +1,26 @@
 ---
 title: API Rules
-version: 1.0.0
-lastUpdated: 2025-08-05
+version: 1.1.0
+lastUpdated: 2025-08-06
 sourcePaths:
   - /src/**
 ---
 Scope
-High-level, code-sourced description of public APIs exposed by systems/components under [src/](src:1). This documents stable entry points used by the game loop and other systems. No speculative or task-planning content.
+High-level, code-sourced description of public APIs exposed by systems/components under [src/](src:1). This documents stable entry points used by the React/R3F orchestrator and other systems. No speculative or task-planning content.
 
 ## Status Legend
 
 - [*] Policy/Process — mandatory procedure
 - [BP] Best‑Practice — required convention
 
+## Execution Context
+
+- The Vite entry delegates to the React app via [src/main.ts](src/main.ts:1), which imports [src/react/main.tsx](src/react/main.tsx:1).
+- Deterministic system order and ticking are orchestrated by the React layer in [src/react/GameOrchestrator.tsx](src/react/GameOrchestrator.tsx:1). The legacy fixed-step loop no longer lives in [src/main.ts](src/main.ts:1).
+
 ## ECS Core Contracts
 
-- Entity lifecycle and update order are orchestrated from [src/main.ts](src/main.ts:63) with a fixed-step loop at [src/main.ts](src/main.ts:175).
-- Systems implement a uniform update(deltaTime, entities) contract derived from the base [System](src/core/System.ts:1).
+- Systems implement a uniform update(deltaTime, entities) contract derived from [System](src/core/System.ts:1).
 - The world registry is managed by [EntityManager](src/core/EntityManager.ts:1).
 
 ## EntityManager
@@ -33,11 +37,11 @@ Stable usage reflected in code:
 
 References:
 
-- Composition and queries are used in [src/systems/PhysicsSystem.ts](src/systems/PhysicsSystem.ts:70), [src/systems/RenderSystem.ts](src/systems/RenderSystem.ts:157), and [src/main.ts](src/main.ts:63).
+- Composition and queries are used in [src/systems/PhysicsSystem.ts](src/systems/PhysicsSystem.ts:1), [src/systems/RenderSystem.ts](src/systems/RenderSystem.ts:1), and orchestrator wiring in [src/react/GameOrchestrator.tsx](src/react/GameOrchestrator.tsx:1).
 
 ## Systems APIs
 
-Systems expose constructor/init methods and select helpers called by peers or main. The canonical deterministic call order is enforced by main.
+Systems expose constructor/init methods and select helpers called by the orchestrator or peers. The canonical deterministic order is enforced by the React orchestrator.
 
 ## PhysicsSystem
 
@@ -56,7 +60,7 @@ Public surface (stable in code):
 
 Behavioral notes:
 
-- Fixed-step 60 Hz internally tolerant to variable dt; authoritative accumulator lives in main. See [src/main.ts](src/main.ts:175).
+- Fixed-step 60 Hz stepping is driven by a single accumulator inside the React orchestrator’s useFrame. Systems tolerate variable frame dt but are stepped at fixed dt by the orchestrator. See [src/react/GameOrchestrator.tsx](src/react/GameOrchestrator.tsx:181).
 - ECS ↔ physics mapping via handle maps. See [src/systems/PhysicsSystem.ts](src/systems/PhysicsSystem.ts:20).
 - Colliders created from ColliderComponent if present; defaults to capsule otherwise. See [src/systems/PhysicsSystem.ts](src/systems/PhysicsSystem.ts:244).
 
@@ -80,9 +84,10 @@ Notes:
 
 ## Other Systems
 
-- InputSystem, MovementSystem, CameraSystem, CombatSystem, ScoringSystem, SoldierSystem exist and are registered in order in [src/main.ts](src/main.ts:63). Their update contracts follow System base; specific public functions used by peers include:
-  - MovementSystem.setInputSystem(inputSystem) and setPhysicsSystem(physicsSystem) as seen in [src/main.ts](src/main.ts:55) and [src/main.ts](src/main.ts:61).
-  - CameraSystem potentially exposes addCollidable(mesh) pattern consumed in [src/main.ts](src/main.ts:88).
+- InputSystem, MovementSystem, CameraSystem, CombatSystem, ScoringSystem, SoldierSystem exist and are registered/stepped in order by the React orchestrator (see [src/systems/index.ts](src/systems/index.ts:1) and [src/react/GameOrchestrator.tsx](src/react/GameOrchestrator.tsx:55)).
+- Known interop:
+  - MovementSystem.setInputSystem(inputSystem) and setPhysicsSystem(physicsSystem) wired in [src/react/GameOrchestrator.tsx](src/react/GameOrchestrator.tsx:44).
+  - CameraSystem/CombatSystem may expose setPhysicsSystem used during wiring.
 
 ### Components APIs
 
@@ -96,29 +101,16 @@ Components are plain structured data with factory helpers. They do not import Th
 
 ### Main Entry API
 
-The application initializes and wires systems, then starts a RAF-driven loop with a fixed 60 Hz accumulator:
-
-- Canvas acquisition and scene/camera/renderer setup [src/main.ts](src/main.ts:18)
-- System construction/registration in deterministic order [src/main.ts](src/main.ts:63)
-- Await physics init before entering loop [src/main.ts](src/main.ts:189)
-- Accumulator stepping and render [src/main.ts](src/main.ts:193)
+- Vite entry: [src/main.ts](src/main.ts:1) which imports [src/react/main.tsx](src/react/main.tsx:1) to boot the React app.
+- Orchestration of systems and the fixed-step accumulator lives in the React layer (see [src/react/GameOrchestrator.tsx](src/react/GameOrchestrator.tsx:181)).
 
 ### Stability and Change Control
 
 - Public APIs documented here must remain compatible with their call sites across [src/](src:1). If a signature change is necessary, update references and this file within the same change.
 - New public APIs must be used by game code in the same PR/change set and lint/type-check clean before merge.
 
-### CRITICAL WARNING
-
-- Do not introduce unused variables, imports, types, functions, files, or assets.
-- Do not mask unused with underscores (_) or void operators; symbols must be legitimately used or removed alongside their call sites.
-- Do not leave stubs, partial implementations, or placeholders; every introduced symbol must be fully implemented and used in the same change.
-- Do not use any to bypass typing. Use precise types or isolate and document interop boundaries explicitly.
-- Do not remove required code solely to silence lint or type errors.
-- Violations are grounds for automatic rejection/termination of the change.
-
 ### References
 
 - Systems: [src/systems/index.ts](src/systems/index.ts:1) and individual files.
 - Components: [src/components/index.ts](src/components/index.ts:1) and individual files.
-- Entry: [src/main.ts](src/main.ts:1)
+- React entry/orchestrator: [src/react/main.tsx](src/react/main.tsx:1), [src/react/GameOrchestrator.tsx](src/react/GameOrchestrator.tsx:1)

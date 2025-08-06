@@ -52,13 +52,22 @@ export function GameOrchestrator() {
     cameraSystem.setPhysicsSystem?.(physicsSystem);
     combatSystem.setPhysicsSystem?.(physicsSystem);
 
-    // Register in deterministic order: Input → Movement → Physics → Combat → Scoring → Camera → Render
+    // Canonical deterministic order (must match src/main.ts and .roo rules):
+    // 1) Input
+    // 2) Movement
+    // 3) Physics
+    // 4) Combat
+    // 5) Scoring
+    // 6) Camera
+    // 7) Render
     entityManager.registerSystem(inputSystem);
     entityManager.registerSystem(movementSystem);
     entityManager.registerSystem(physicsSystem);
     entityManager.registerSystem(combatSystem);
     entityManager.registerSystem(scoringSystem);
     entityManager.registerSystem(cameraSystem);
+    // 7) Render — ensure animation mixers and scene updates tick each frame
+    entityManager.registerSystem(renderSystem);
 
     // Soldier visuals/animation (independent)
     const soldierSystem = new SoldierSystem(scene, entityManager);

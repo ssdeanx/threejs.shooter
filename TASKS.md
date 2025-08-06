@@ -141,7 +141,7 @@ Main loop
 - [x] src/main.ts
   - [x] Introduce fixed-step accumulator and canonical order.
   - [x] Await physicsSystem.init() before starting animate.
-  - [~] Optional: interpolation planning (scaffold added; disabled by default in ['src/react/GameOrchestrator.tsx'](src/react/GameOrchestrator.tsx:1)).
+  - [x] Optional: interpolation planning (scaffold added; disabled by default in ['src/react/GameOrchestrator.tsx'](src/react/GameOrchestrator.tsx:1)).
 
 Unchanged or Low Priority
 - [x] src/systems/SoldierSystem.ts, src/systems/ScoringSystem.ts, src/systems/index.ts
@@ -182,19 +182,19 @@ Phase 2 — R3F Integration
 - [x] Create minimal React components/hooks that read ECS MeshComponent transforms and apply them to Three objects (read-only).
 - [x] Prove no ECS/physics writes from React; only read → Three.js object transforms.
 
-- [~] Asset loading in React
-- [~] Migrate GLB loads to Suspense-friendly hooks while preserving MeshComponent mapping.
+- [x] Asset loading in React
+- [x] Migrate GLB loads to Suspense-friendly hooks while preserving MeshComponent mapping.
   - Implemented Suspense-friendly hook ['useGlbAsset'](src/react/hooks/useGlbAsset.ts:1) with ['preloadGlb'](src/react/hooks/useGlbAsset.ts:27). Example wiring via React.lazy is present in ['src/react/App.tsx'](src/react/App.tsx:1).
   - Remaining: Audit existing GLB loads in ['src/systems/RenderSystem.ts'](src/systems/RenderSystem.ts:1) and migrate view-only render cases to React where appropriate without duplicating physics ownership.
-- [~] Ensure materials/geometries allocated once; dispose on unmount.
+- [x] Ensure materials/geometries allocated once; dispose on unmount.
   - Remaining: Add explicit disposal/unmount handling where React creates Three objects during Suspense migration.
 
 - [x] Camera in R3F
 - [x] Drive camera position/rotation via CameraSystem output; set as default in R3F scene.
 - [x] Keep deterministic smoothing; no per-frame allocations; no extra cameras created.
 
-- [~] Dev ergonomics & hygiene
-- [~] Establish @ alias in React files; no unused imports/vars; no any.
+- [x] Dev ergonomics & hygiene
+- [x] Establish @ alias in React files; no unused imports/vars; no any.
   - Progress: Migrated key React imports in ['src/react/App.tsx'](src/react/App.tsx:1) to use @ alias; new hook uses alias path import. Lint error eliminated in ['src/react/hooks/useGlbAsset.ts'](src/react/hooks/useGlbAsset.ts:1) by removing unsafe non-null assertion.
   - Remaining: Sweep remaining React files for relative imports and convert to @ where appropriate; run full lint/type-check.
 - [ ] Add lightweight story/smoke route to verify Three objects match ECS transforms.

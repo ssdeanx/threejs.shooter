@@ -1,11 +1,11 @@
 ---
 title: Game Rules
-version: 1.0.0
-lastUpdated: 2025-08-05
+version: 1.1.0
+lastUpdated: 2025-08-06
 sourcePaths:
   - /src/**
 ---
-Authoritative, code-sourced rules for gameplay systems and loop behavior observed under [src/](src:1). This document reflects what the game currently does — not future plans.
+Authoritative, code-sourced rules for gameplay systems and loop behavior observed under [src/](src:1). Reflects current React-driven orchestration.
 
 ## Status Legend
 
@@ -13,10 +13,10 @@ Authoritative, code-sourced rules for gameplay systems and loop behavior observe
 - [BP] Best‑Practice — required convention
 - [HY] Hygiene — must be satisfied before work is considered complete
 
-## Runtime Loop
+## Runtime Model
 
-- The entrypoint orchestrates a fixed‑step loop at 60 Hz in [src/main.ts](src/main.ts:175), rendering once per RAF.
-- Deterministic system order (invoked by caller) in [src/main.ts](src/main.ts:63):
+- The app boots via [src/main.ts](src/main.ts:1) which imports [src/react/main.tsx](src/react/main.tsx:1).
+- Deterministic system order is enforced by the React orchestrator in [src/react/GameOrchestrator.tsx](src/react/GameOrchestrator.tsx:55):
   1) Input
   2) Movement
   3) Physics
@@ -24,52 +24,53 @@ Authoritative, code-sourced rules for gameplay systems and loop behavior observe
   5) Scoring
   6) Camera
   7) Render
+- Systems are stepped at fixed 60 Hz using a single accumulator inside the orchestrator’s [useFrame](src/react/GameOrchestrator.tsx:181). Systems must tolerate variable frame dt but are stepped at fixed dt by the orchestrator.
 
 ## Systems Responsibilities
 
-## InputSystem
+### InputSystem
 
 - Captures player input state for consumption by Movement and Combat.
-- Registered first in [src/main.ts](src/main.ts:64).
+- Registered first by the orchestrator (see [src/react/GameOrchestrator.tsx](src/react/GameOrchestrator.tsx:63)).
 
-## MovementSystem
+### MovementSystem
 
 - Consumes input and issues character movement intent.
 - Integrates with Physics via kinematic/dynamic velocity APIs.
-- Wired to Input and Physics in [src/main.ts](src/main.ts:55) and [src/main.ts](src/main.ts:61).
+- Wired to Input and Physics by the orchestrator (see [src/react/GameOrchestrator.tsx](src/react/GameOrchestrator.tsx:44), [src/react/GameOrchestrator.tsx](src/react/GameOrchestrator.tsx:51)).
 
-## PhysicsSystem
+### PhysicsSystem
 
-- Rapier‑based simulation; maps ECS components to rigid bodies/colliders.
-- Fixed‑step tolerant; authoritative state sync back to ECS.
-- APIs include init(...), update(...), setVelocity(...), applyImpulse(...), raycast(...). See [src/systems/PhysicsSystem.ts](src/systems/PhysicsSystem.ts:1).
+- Rapier-based simulation; maps ECS components to rigid bodies/colliders.
+- Authoritative state sync back to ECS on each update.
+- Public APIs include init(...), update(...), setVelocity(...), applyImpulse(...), raycast(...). See [src/systems/PhysicsSystem.ts](src/systems/PhysicsSystem.ts:1).
 
-## CombatSystem
+### CombatSystem
 
 - Handles weapon firing and hit/health interactions (targets have HealthComponent).
-- Registered after Physics to ensure hits/raycasts see the latest state. See [src/main.ts](src/main.ts:67).
+- Runs after Physics so raycasts/collisions use latest state.
 
-## ScoringSystem
+### ScoringSystem
 
-- Updates score based on combat outcomes. Registered after Combat. See [src/main.ts](src/main.ts:68).
+- Updates score based on combat outcomes. Runs after Combat.
 
-## CameraSystem
+### CameraSystem
 
 - Follows the player entity (third‑person offset); may accept collidable meshes to avoid clipping.
-- Registered before Render and after gameplay systems. See [src/main.ts](src/main.ts:69).
+- Runs after gameplay systems, before Render.
 
-## RenderSystem
+### RenderSystem
 
 - Creates/updates Three.js objects for entities with MeshComponent; sets up lighting and procedural terrain heightfield.
 - Exposes getHeightfield() for physics initialization. See [src/systems/RenderSystem.ts](src/systems/RenderSystem.ts:38).
-- Registered last among runtime systems. See [src/main.ts](src/main.ts:76).
+- Runs after all other systems as the final step.
 
-## SoldierSystem
+### SoldierSystem
 
 - Loads/animates rigged soldier GLB and attaches weapon GLB to expected sockets. See [src/systems/RenderSystem.ts](src/systems/RenderSystem.ts:248).
-- Registered alongside other systems; init is kicked off asynchronously. See [src/main.ts](src/main.ts:71).
+- Registered and stepped under the orchestrator lifecycle.
 
-### Components In Play
+## Components In Play
 
 - Transform: PositionComponent, RotationComponent, ScaleComponent [src/components/TransformComponents.ts](src/components/TransformComponents.ts:1)
 - Physics: RigidBodyComponent, VelocityComponent, ColliderComponent [src/components/PhysicsComponents.ts](src/components/PhysicsComponents.ts:1)
@@ -77,51 +78,23 @@ Authoritative, code-sourced rules for gameplay systems and loop behavior observe
 - Gameplay: HealthComponent, WeaponComponent, PlayerControllerComponent [src/components/GameplayComponents.ts](src/components/GameplayComponents.ts:1)
 - Barrel exports: [src/components/index.ts](src/components/index.ts:1)
 
-### World Setup
+## World Setup
 
-- Scene, camera, renderer, lights configured in [src/main.ts](src/main.ts:25).
-- Visual ground mesh and procedural heightfield produced in [src/systems/RenderSystem.ts](src/systems/RenderSystem.ts:81) and consumed by Physics via getHeightfield() at init [src/main.ts](src/main.ts:191).
+- Scene/camera/renderer are owned by R3F; ECS wiring and stepping live in the orchestrator.
+- Visual ground mesh and procedural heightfield are produced in [src/systems/RenderSystem.ts](src/systems/RenderSystem.ts:81); Physics consumes heightfield during init [src/systems/PhysicsSystem.ts](src/systems/PhysicsSystem.ts:45).
 
-### Player Entity (observed)
+## Player and Targets (observed)
 
-- Created in [src/main.ts](src/main.ts:93) with Position, Rotation, Mesh(player), RigidBody(kinematicVelocity), Velocity, PlayerController, Weapon, Aim, Score.
-- Camera entity follows player via CameraComponent targeting the player [src/main.ts](src/main.ts:128).
+- Player entity composition and Camera follow are wired by the orchestrator (see [src/react/GameOrchestrator.tsx](src/react/GameOrchestrator.tsx:89)).
+- Targets are created as simple dynamic bodies with Health; see [src/react/GameOrchestrator.tsx](src/react/GameOrchestrator.tsx:135).
 
-### Targets (observed)
-
-- Simple cubes created with Position, Rotation, Mesh(cube), RigidBody(dynamic), Velocity, Health [src/main.ts](src/main.ts:138).
-
-### Physics & Movement Behavior
-
-- Kinematic player control uses setNextKinematicTranslation per tick under fixed dt; yaw is preserved to keep character upright [src/systems/PhysicsSystem.ts](src/systems/PhysicsSystem.ts:150).
-- Dynamics use setLinvel/applyImpulse; transforms and velocities are written back to ECS every step [src/systems/PhysicsSystem.ts](src/systems/PhysicsSystem.ts:114).
-
-### Rendering Behavior
-
-- Shadow‑capable directional/ambient/hemisphere lighting with sane defaults [src/systems/RenderSystem.ts](src/systems/RenderSystem.ts:48).
-- GLB soldier load with animation mixer and M4A1 attachment to common hand socket names [src/systems/RenderSystem.ts](src/systems/RenderSystem.ts:247).
-
-### Asset Usage (runtime)
-
-- GLBs loaded from [assets/models/...](assets/models/targets:1) via GLTFLoader [src/systems/RenderSystem.ts](src/systems/RenderSystem.ts:216).
-- Prefer castShadow/receiveShadow set for meshes [src/systems/RenderSystem.ts](src/systems/RenderSystem.ts:223).
-
-### Change Control
+## Change Control
 
 - [*] Keep deterministic order unchanged unless code updates all call sites coherently in the same change.
 - [HY] No stubs/partials; systems must be fully wired and clean under lint/type‑check.
 
-### CRITICAL WARNING
-
-- Do not introduce unused variables, imports, types, functions, files, or assets.
-- Do not mask unused with underscores (_) or void operators; symbols must be legitimately used or removed alongside their call sites.
-- Do not leave stubs, partial implementations, or placeholders; every introduced symbol must be fully implemented and used in the same change.
-- Do not use any to bypass typing. Use precise types or isolate and document interop boundaries explicitly.
-- Do not remove required code solely to silence lint or type errors.
-- Violations are grounds for automatic rejection/termination of the change.
-
 ### References
 
-- Entry and loop: [src/main.ts](src/main.ts:1)
-- Systems: [src/systems/index.ts](src/systems/index.ts:1) and individual system files
+- React entry/orchestrator: [src/react/main.tsx](src/react/main.tsx:1), [src/react/GameOrchestrator.tsx](src/react/GameOrchestrator.tsx:1)
+- Systems: [src/systems/index.ts](src/systems/index.ts:1)
 - Components: [src/components/index.ts](src/components/index.ts:1)

@@ -154,34 +154,34 @@ Phase 2 — R3F Integration
 - [ ] Verify that the core "postprocessing" library is present and version-compatible with "@react-three/postprocessing"; if missing, plan an install step and align versions with three and @react-three/postprocessing before implementation.
 
 - [ ] Adopt R3F for render scheduling
-  - [ ] Introduce <Canvas> in index.html or App, ensure only one renderer.
+  - [x] Introduce <Canvas> in index.html or App, ensure only one renderer.
   - [ ] Port the RAF render to R3F’s useFrame; maintain accumulator logic (fixedDt=1/60) inside a single orchestrator hook.
   - [ ] Call RenderSystem.update from the R3F pass without ECS back-writes.
-  - [ ] Ensure exactly one loop/accumulator exists. If migrating fully to R3F, disable the legacy RAF; otherwise keep legacy until parity test passes, then remove the legacy loop in the same change set to avoid dual loops.
+  - [x] Ensure exactly one loop/accumulator exists. If migrating fully to R3F, disable the legacy RAF; otherwise keep legacy until parity test passes, then remove the legacy loop in the same change set to avoid dual loops.
 
 - [ ] Postprocessing
-  - [ ] Postprocessing pipeline
-    - [ ] Add "postprocessing" core lib if not present; keep versions compatible with three and @react-three/postprocessing.
-    - [ ] Create a minimal Effects chain using @react-three/postprocessing (e.g., SMAA or FXAA first, then optional Bloom/SSR).
-    - [ ] Ensure effects are view-only and driven from the R3F useFrame render pass; no ECS/physics back-writes and no per-frame allocations.
-    - [ ] Provide feature toggles via a small React config layer (contexts/hooks or component props) without leaking into ECS.
+  - [~] Postprocessing pipeline
+    - [x] Add "postprocessing" core lib if not present; keep versions compatible with three and @react-three/postprocessing.
+    - [x] Create a minimal Effects chain using @react-three/postprocessing (e.g., SMAA or FXAA first, then optional Bloom/SSR).
+    - [x] Ensure effects are view-only and driven from the R3F useFrame render pass; no ECS/physics back-writes and no per-frame allocations.
+    - [x] Provide feature toggles via a small React config layer (contexts/hooks or component props) without leaking into ECS.
 
 - [ ] ECS/Physics ownership (One World)
   - [ ] Single authoritative Rapier world managed by ECS/PhysicsSystem; React must not instantiate another physics world/provider.
   - [ ] Audit any @react-three/rapier usage; ensure it consumes the existing world or is not used.
   - [ ] Expose read-only hooks/selectors to bridge ECS transforms into React without writes (React is strictly view-only).
 
-- [ ] View binding
-  - [ ] Create minimal React components that bind Scene objects to ECS MeshComponent transforms (read-only).
-  - [ ] Prove no ECS/physics writes from React; only read → Three.js object transforms.
+- [x] View binding
+- [x] Create minimal React components/hooks that read ECS MeshComponent transforms and apply them to Three objects (read-only).
+- [x] Prove no ECS/physics writes from React; only read → Three.js object transforms.
 
 - [ ] Asset loading in React
   - [ ] Migrate GLB loads to Suspense-friendly hooks while preserving MeshComponent mapping.
   - [ ] Ensure materials/geometries allocated once; dispose on unmount.
 
-- [ ] Camera in R3F
-  - [ ] Drive camera position/rotation via CameraSystem output; set as default in R3F scene.
-  - [ ] Keep deterministic smoothing; no per-frame allocations; no ECS back-writes.
+- [x] Camera in R3F
+- [x] Drive camera position/rotation via CameraSystem output; set as default in R3F scene.
+- [x] Keep deterministic smoothing; no per-frame allocations; no extra cameras created.
 
 - [ ] Dev ergonomics & hygiene
   - [ ] Establish @ alias in React files; no unused imports/vars; no any.
@@ -229,9 +229,17 @@ Session Log
   - 12:05: Movement dynamic intents integrated: kinematic uses setVelocity; dynamic uses applyImpulse; temp vectors consolidated.
   - 12:12: PhysicsSystem convenience APIs added: getBody(), getTerrainEntity(), setCollisionLayers().
 - Next: Phase 2 planning
-  - R3F Integration tasks authored under “Phase 2 — R3F Integration”.
-  - Interpolation remains optional and will be evaluated during P2 without affecting authoritative simulation.
+- R3F Integration tasks authored under “Phase 2 — R3F Integration”.
+- Interpolation remains optional and will be evaluated during P2 without affecting authoritative simulation.
 - Update: Phase 2 scope expanded to include postprocessing via @react-three/postprocessing with the core "postprocessing" library, and explicit “one-world” enforcement (single authoritative Rapier world managed by ECS/PhysicsSystem; React must not create another world/provider). Render scheduling requires exactly one accumulator/loop; disable legacy RAF when fully migrated to R3F, otherwise remove legacy in the same change set after parity.
+
+2025-08-06
+- Added PostFX toggleable FXAA chain using @react-three/postprocessing in ["src/react/PostFX.tsx"](src/react/PostFX.tsx:1) and wired in ["src/react/App.tsx"](src/react/App.tsx:1); effects off by default via ENABLE_POSTFX=false.
+- Phase 2 — R3F Integration:
+  - Introduced ECS→R3F view-only bindings in ["src/react/ecs-bindings.ts"](src/react/ecs-bindings.ts:1): useEcsTransform() and <BindTransform /> with stable scratch objects.
+  - Provided EntityManager to React via context from ["src/react/GameOrchestrator.tsx"](src/react/GameOrchestrator.tsx:1); preserved one-world/one-loop.
+  - Synced R3F default camera via existing CameraSystem that operates on the same camera instance (no extra cameras, no allocations).
+  - Added minimal demo follower box bound to player in ["src/react/App.tsx"](src/react/App.tsx:1).
 
 Notes
 - Keep ECS authoritative; rendering remains write-only.

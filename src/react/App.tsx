@@ -20,14 +20,14 @@ const ENABLE_GLTF_EXAMPLE = false;
 function DemoFollowerBox(): React.ReactElement | null {
   const entityManager = useEntityManager();
   const playerId = useMemo(() => {
-    const camArray = entityManager.getComponentArrays().get('CameraComponent') as (unknown[] | undefined);
+    const camArray = entityManager.getComponentArrays().get('CameraComponent') as ({ target?: number }[] | undefined);
     if (!camArray) {
       return null;
     }
     for (let i = 0; i < camArray.length; i++) {
-      const cam = camArray[i] as any;
+      const cam = camArray[i];
       if (cam && typeof cam.target === 'number') {
-        return cam.target as number;
+        return cam.target;
       }
     }
     return null;
@@ -72,7 +72,9 @@ function DemoFollowerBox(): React.ReactElement | null {
  * Keeps production clean while providing a quick sanity surface for development.
  */
 function Smoke(): React.ReactElement | null {
-  if (!ENABLE_SMOKE) return null;
+  if (!ENABLE_SMOKE) {
+    return null;
+  }
   return (
     <>
       {/* Minimal demo view binding */}
@@ -86,7 +88,9 @@ function Smoke(): React.ReactElement | null {
  * Disabled by default via feature flag to avoid changing visuals.
  */
 function GltfExample(): React.ReactElement | null {
-  if (!ENABLE_GLTF_EXAMPLE) return null;
+  if (!ENABLE_GLTF_EXAMPLE) {
+    return null;
+  }
 
   // Use dynamic import to stay ESM + satisfy lint rules
   const LazyGltf = React.lazy(async () => {

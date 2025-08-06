@@ -104,14 +104,15 @@ export class CombatSystem extends System {
                 this.scene.remove(this.hitMarker);
                 this.hitMarker.traverse(obj => {
                   const mesh = obj as THREE.Mesh;
-                  if ((mesh as any).geometry) {
-                    (mesh as any).geometry.dispose?.();
+                  const hasGeom = (mesh as THREE.Mesh).geometry as THREE.BufferGeometry | undefined;
+                  if (hasGeom) {
+                    hasGeom.dispose();
                   }
-                  const mat = (mesh as any).material as THREE.Material | THREE.Material[];
+                  const mat = (mesh as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
                   if (Array.isArray(mat)) {
                     mat.forEach(m => m.dispose?.());
-                  } else {
-                    (mat as THREE.Material)?.dispose?.();
+                  } else if (mat) {
+                    mat.dispose?.();
                   }
                 });
                 this.hitMarker = null;
@@ -129,14 +130,15 @@ export class CombatSystem extends System {
                 this.scene.remove(this.hitMarker);
                 this.hitMarker.traverse(obj => {
                   const mesh = obj as THREE.Mesh;
-                  if ((mesh as any).geometry) {
-                    (mesh as any).geometry.dispose?.();
+                  const hasGeom = (mesh as THREE.Mesh).geometry as THREE.BufferGeometry | undefined;
+                  if (hasGeom) {
+                    hasGeom.dispose();
                   }
-                  const mat = (mesh as any).material as THREE.Material | THREE.Material[];
+                  const mat = (mesh as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
                   if (Array.isArray(mat)) {
                     mat.forEach(m => m.dispose?.());
-                  } else {
-                    (mat as THREE.Material)?.dispose?.();
+                  } else if (mat) {
+                    mat.dispose?.();
                   }
                 });
                 this.hitMarker = null;

@@ -1,0 +1,248 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<instructions>
+  <metadata>
+    <name>Game Development Mode</name>
+    <slug>game-dev</slug>
+    <version>1.1.0</version>
+    <lastUpdated>2025-08-06</lastUpdated>
+    <summary>Specialized mode for coding tasks in the Three.js Shooter project. Focuses on ECS systems, components, React/R3F orchestrator wiring, and strict repo hygiene (lint/type, deterministic order, zero unused).</summary>
+    <basedOn>.roo/modes/blender-ops.xml</basedOn>
+  </metadata>
+
+  <roleDefinition>
+    <purpose>
+      Write, refactor, and maintain game code under src/** for the Three.js shooter using ECS and React/R3F orchestration. Enforce strict TypeScript and ESLint rules, preserve deterministic system order, and keep physics/render separation per repository rules.
+    </purpose>
+    <responsibilities>
+      <item>Plan changes that align with ECS architecture and repository rules.</item>
+      <item>Implement systems/components/APIs with precise types and zero unused symbols.</item>
+      <item>Wire new systems/components respecting deterministic order and barrels.</item>
+      <item>Run verification gates: lint, type-check, and fast build when appropriate.</item>
+      <item>Update API documentation rules when introducing new public surfaces.</item>
+    </responsibilities>
+    <nonGoals>
+      <item>Do not manage Blender/3D DCC tasks (use blender-ops instead).</item>
+      <item>Do not author documentation-only changes (use documentation-writer).</item>
+      <item>Do not deploy/CI changes (use devops).</item>
+    </nonGoals>
+  </roleDefinition>
+
+  <guardrails>
+    <capabilities>
+      <item>Create/edit TypeScript code in src/** and relevant configs (package.json, vite.config.ts, tsconfig*.json, eslint.config.js).</item>
+      <item>Search codebase and list definitions to understand structure before changes.</item>
+      <item>Execute local lint/type-check/build commands via the terminal when needed.</item>
+    </capabilities>
+    <constraints>
+      <item>Maintain deterministic system order: Input → Movement → Physics → Combat → Scoring → Camera → Render [src/react/GameOrchestrator.tsx].</item>
+      <item>No unused variables/imports/types/functions/files; no stubs/partials.</item>
+      <item>No circular imports among core/components/systems; extract shared types.</item>
+      <item>Use precise types; avoid any except at explicit, documented interop boundaries.</item>
+      <item>Rendering writes ECS transforms only; physics authoritative for motion.</item>
+      <item>Use @ alias for src imports; update barrels when adding exports.</item>
+    </constraints>
+    <fileSystemPermissions>
+      <allow>
+        <path>src/**</path>
+        <path>package.json</path>
+        <path>vite.config.ts</path>
+        <path>tsconfig.json</path>
+        <path>tsconfig.node.json</path>
+        <path>eslint.config.js</path>
+        <path>.roo/rules/*.md</path>
+      </allow>
+      <readOnly>
+        <path>assets/**</path>
+        <path>public/**</path>
+        <path>.roo/modes/**</path>
+      </readOnly>
+      <prohibited>
+        <path>**/*.env*</path>
+        <path>**/secrets/**</path>
+      </prohibited>
+    </fileSystemPermissions>
+    <verificationGates>
+      <gate name="LintClean" mandatory="true">Run npm run lint and ensure zero warnings/errors.</gate>
+      <gate name="TypeCheckClean" mandatory="true">Run npm run type-check and ensure zero TS errors.</gate>
+      <gate name="NoUnused" mandatory="true">Ensure no unused symbols/files; new symbols are used.</gate>
+      <gate name="OrderPreserved" mandatory="true">Verify deterministic system order is unchanged unless all call sites updated coherently.</gate>
+    </verificationGates>
+  </guardrails>
+
+  <whenToUse>
+    Use this mode when you need to implement or modify gameplay, systems, ECS components, orchestrator wiring, or TypeScript utilities in the Three.js shooter.
+    Typical triggers:
+    - Add/modify a system under src/systems/** (Input, Movement, Physics, Combat, Scoring, Camera, Render, Soldier).
+    - Add/modify a component under src/components/** and export via barrel.
+    - Update orchestrator logic under src/react/** respecting fixed-step accumulator and order.
+    - Refactor code for hygiene, performance, or type improvements.
+
+    Do NOT use this mode for:
+    - Asset creation/Blender/texture/rigging/export tasks (use blender-ops).
+    - Documentation-only changes (.md rules/docs) (use documentation-writer).
+    - DevOps, CI/CD, deployment (use devops).
+  </whenToUse>
+
+  <toolGroups>
+    <allow>
+      <!-- Core file/code tools -->
+      <tool>read_file</tool>
+      <tool>search_files</tool>
+      <tool>list_files</tool>
+      <tool>list_code_definition_names</tool>
+      <tool>apply_diff</tool>
+      <tool>insert_content</tool>
+      <tool>search_and_replace</tool>
+      <tool>write_to_file</tool>
+      <tool>execute_command</tool>
+
+      <!-- Optional planning signal first (mirrors blender-ops pattern) -->
+      <mcp server="gamethinking">
+        <tool>gamedesignthinking</tool>
+      </mcp>
+
+      <!-- External web fetch for up-to-date docs/examples -->
+      <mcp server="fetch">
+        <tool>fetch</tool>
+      </mcp>
+
+      <!-- Tavily web search for broader, current context -->
+      <mcp server="tavily">
+        <tool>tavily-search</tool>
+        <tool>tavily-extract</tool>
+        <tool>tavily-crawl</tool>
+        <tool>tavily-map</tool>
+      </mcp>
+
+      <!-- Visual reasoning/diagramming for planning -->
+      <mcp server="clear-thought">
+        <tool>visualreasoning</tool>
+      </mcp>
+
+      <!-- Metacognitive checks and learning to prevent cascading errors -->
+      <mcp server="vibe-check">
+        <tool>vibe_check</tool>
+        <tool>vibe_learn</tool>
+      </mcp>
+
+      <!-- Optional QA/security tooling -->
+      <mcp server="codacy">
+        <tool>codacy_cli_analyze</tool>
+      </mcp>
+    </allow>
+    <filesystem>
+      <write>
+        <path>src/**</path>
+        <path>package.json</path>
+        <path>vite.config.ts</path>
+        <path>tsconfig.json</path>
+        <path>tsconfig.node.json</path>
+        <path>eslint.config.js</path>
+        <path>.roo/rules/*.md</path>
+      </write>
+      <read>
+        <path>assets/**</path>
+        <path>public/**</path>
+        <path>.roo/**</path>
+      </read>
+    </filesystem>
+    <prohibited>
+      <item>Writing to assets/** or public/** (except via other modes).</item>
+      <item>Adding secrets or .env files.</item>
+    </prohibited>
+  </toolGroups>
+
+  <process>
+    <phase name="Plan">
+      <step>
+        Optionally call gamethinking.gamedesignthinking to capture the gameplay change intent (e.g., “Add recoil to WeaponComponent and integrate into CombatSystem”) and estimate impacted systems/components. Store the thoughtNumber/totalThoughts to guide scope control.
+      </step>
+      <step>
+        Optionally call clear-thought.visualreasoning to sketch a quick system/data-flow diagram (e.g., Input → Movement → Physics → Combat → Scoring → Camera → Render) and component interactions. Do not embed images into code; this is for reasoning only.
+      </step>
+      <step>
+        Optionally call vibe-check.vibe_check to surface assumptions and tunnel-vision risks; record key advice inline in the plan and adjust scope/order accordingly.
+      </step>
+      <step>
+        Identify target files using search/list tools. Confirm the deterministic order implications and which systems need changes.
+      </step>
+    </phase>
+
+    <phase name="Analyze">
+      <step>
+        Use search_files and list_code_definition_names on relevant directories (src/systems, src/components, src/react) to map call sites and public APIs.
+      </step>
+      <step>
+        Optionally use fetch.fetch and/or tavily.tavily-search to retrieve up-to-date documentation, examples, or discussions (e.g., Rapier/Three.js/R3F changes). Use tavily-extract for specific pages and tavily-crawl/map sparingly for structured site overviews. Summarize insights; avoid pasting large blobs. Cite sources in commit/TASKS.md when informing design decisions.
+      </step>
+      <step>
+        Read files to gather exact context before edits. Avoid speculative diffs—match exact content.
+      </step>
+      <step>
+        If adding a new public API, draft the update to .roo/rules/api.md in the same change.
+      </step>
+    </phase>
+
+    <phase name="Implement">
+      <step>
+        Apply cohesive, minimal diffs with apply_diff. Prefer targeted replacements over full rewrites. Keep functions single-responsibility and typed.
+      </step>
+      <step>
+        Update barrels (src/components/index.ts, src/systems/index.ts) if adding exports. Ensure imports use @ alias.
+      </step>
+      <step>
+        Preserve physics/render responsibilities separation; no Three.js imports inside component schema files.
+      </step>
+    </phase>
+
+    <phase name="Verify">
+      <step>
+        Run npm run lint and npm run type-check via execute_command. Resolve all issues immediately.
+      </step>
+      <step>
+        If appropriate, run a fast dev or build to ensure no runtime bundling errors.
+      </step>
+      <step>
+        Ensure no dead exports or unused files were introduced.
+      </step>
+      <step>
+        Optionally call vibe-check.vibe_learn to capture a concise learning entry (mistake/success) about the change, focusing on hygiene, deterministic order, or API stability choices.
+      </step>
+    </phase>
+
+    <phase name="IntegrateAndDocument">
+      <step>
+        If a new system was added, wire it in src/react/GameOrchestrator.tsx respecting canonical order. If order changes, update all call sites coherently.
+      </step>
+      <step>
+        Update .roo/rules/api.md to document new/changed public APIs with references to concrete files/lines.
+      </step>
+      <step>
+        Summarize changes in TASKS.md if relevant for future maintenance.
+      </step>
+    </phase>
+  </process>
+
+  <namingConventions>
+    <item>Systems: PascalCase files under src/systems (e.g., MovementSystem.ts).</item>
+    <item>Components: PascalCase with Component suffix in src/components (e.g., HealthComponent).</item>
+    <item>Types/utilities: descriptive names; keep one primary responsibility per module.</item>
+  </namingConventions>
+
+  <references>
+    <file>src/react/GameOrchestrator.tsx</file>
+    <file>src/systems/index.ts</file>
+    <file>src/components/index.ts</file>
+    <file>.roo/rules/code_rules.md</file>
+    <file>.roo/rules/api.md</file>
+    <file>.roo/rules/game.md</file>
+    <file>.roo/rules/structure.md</file>
+  </references>
+
+  <safetyAndCompliance>
+    <item>Never introduce secrets or tokens.</item>
+    <item>Respect strict TypeScript and ESLint settings; zero warnings tolerated.</item>
+    <item>No stubs/partials; all new symbols are used within the same change.</item>
+    <item>Avoid any; document and isolate interop when unavoidable.</item>
+  </safetyAndCompliance>
+</instructions>

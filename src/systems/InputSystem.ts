@@ -34,6 +34,7 @@ export interface InputConfig {
   invertY: boolean;
 }
 
+/* eslint-env browser */
 export class InputSystem extends System {
   private inputState: InputState;
   private keyBuffer: Map<string, number> = new Map();
@@ -41,11 +42,15 @@ export class InputSystem extends System {
   private isPointerLocked = false;
   private inputConfig: InputConfig;
 
+  // attachment lifecycle
+  private attachedEl: globalThis.HTMLElement | null = null;
+  private cleanupFns: Array<() => void> = [];
+
   constructor(config?: Partial<InputConfig>) {
     super([]); // InputSystem doesn't require specific components
     this.inputState = this.createInitialInputState();
     this.inputConfig = this.createDefaultConfig(config);
-    this.setupInputListeners();
+    // Do NOT attach globally here; caller must attach to a specific canvas/element.
   }
 
   private createDefaultConfig(userConfig?: Partial<InputConfig>): InputConfig {
@@ -96,33 +101,46 @@ export class InputSystem extends System {
       tab: false
     };
   }
+private addListener<K extends keyof globalThis.DocumentEventMap>(
+  target: globalThis.Document | globalThis.HTMLElement | globalThis.Window,
+  type: K,
+  listener: (ev: globalThis.DocumentEventMap[K]) => void,
+  opts?: boolean | globalThis.AddEventListenerOptions
+) {
+  target.addEventListener(type, listener as globalThis.EventListener, opts as boolean | globalThis.AddEventListenerOptions | undefined);
+  this.cleanupFns.push(() => target.removeEventListener(type, listener as globalThis.EventListener, opts as boolean | globalThis.AddEventListenerOptions | undefined));
+}
 
-  private setupInputListeners(): void {
-    // Keyboard events
-    document.addEventListener('keydown', (event) => {
-      this.handleKeyDown(event);
-    });
+  attach(target: globalThis.HTMLElement): void {
+    if (this.attachedEl === target) {
+      return;
+    }
+    this.detach();
 
-    document.addEventListener('keyup', (event) => {
-      this.handleKeyUp(event);
-    });
+    this.attachedEl = target;
 
-    // Mouse events
-    document.addEventListener('click', (event) => {
-      if (event.button === 0) { // Left click
-        this.requestPointerLock();
-      }
-    });
+    // Ensure target can receive focus and keyboard
+    if ((this.attachedEl as any).tabIndex == null || (this.attachedEl as any).tabIndex < 0) {
+      (this.attachedEl as any).tabIndex = 0;
+    }
 
-    document.addEventListener('mousedown', (event) => {
+    // Focus on click to ensure key events deliver to element
+    const focusOnClick = () => this.attachedEl?.focus({ preventScroll: true });
+    this.addListener(this.attachedEl, 'click', focusOnClick);
+
+    // Keyboard scoped to element
+    this.addListener(this.attachedEl, 'keydown', (event: globalThis.KeyboardEvent) => this.handleKeyDown(event));
+    this.addListener(this.attachedEl, 'keyup', (event: globalThis.KeyboardEvent) => this.handleKeyUp(event));
+
+    // Mouse on element
+    this.addListener(this.attachedEl, 'mousedown', (event: globalThis.MouseEvent) => {
       if (event.button === 0) {
         this.inputState.leftClick = true;
       } else if (event.button === 2) {
         this.inputState.rightClick = true;
       }
     });
-
-    document.addEventListener('mouseup', (event) => {
+    this.addListener(this.attachedEl, 'mouseup', (event: globalThis.MouseEvent) => {
       if (event.button === 0) {
         this.inputState.leftClick = false;
       } else if (event.button === 2) {
@@ -130,36 +148,67 @@ export class InputSystem extends System {
       }
     });
 
-    document.addEventListener('mousemove', (event) => {
-      if (this.isPointerLocked) {
-        this.inputState.mouseMovementX = event.movementX;
-        this.inputState.mouseMovementY = event.movementY;
-        this.inputState.mouseX += event.movementX;
-        this.inputState.mouseY += event.movementY;
+    // Request pointer lock on primary click on the element
+    this.addListener(this.attachedEl, 'click', (event: globalThis.MouseEvent) => {
+      if (event.button === 0) {
+        this.requestPointerLock();
       }
     });
 
-    // Pointer lock events
-    document.addEventListener('pointerlockchange', () => {
-      this.isPointerLocked = document.pointerLockElement === document.body;
+    // Mouse move uses document events while locked; otherwise local move still updates accumulated position.
+    // Also handle unlocked case so React-embedded canvas still sees deltas pre-lock.
+    this.addListener(document, 'mousemove', (event: globalThis.MouseEvent) => {
+      const dx = event.movementX || 0;
+      const dy = event.movementY || 0;
+      if (this.isPointerLocked) {
+        this.inputState.mouseMovementX = dx;
+        this.inputState.mouseMovementY = dy;
+        this.inputState.mouseX += dx;
+        this.inputState.mouseY += dy;
+      } else if (this.attachedEl) {
+        // Provide small deltas even when not locked to help UI aim previews without violating pointer-lock semantics
+        this.inputState.mouseMovementX = dx;
+        this.inputState.mouseMovementY = dy;
+      }
     });
 
-    // Browser focus/blur events
-    window.addEventListener('blur', () => {
-      this.clearInputState();
-    });
-
-    window.addEventListener('focus', () => {
-      this.clearInputState();
-    });
-
-    // Prevent context menu on right click
-    document.addEventListener('contextmenu', (event) => {
+    // Prevent context menu only while attached
+    this.addListener(this.attachedEl, 'contextmenu', (event: globalThis.MouseEvent) => {
       event.preventDefault();
     });
+
+    // Pointer lock change on document
+    this.addListener(document, 'pointerlockchange', () => {
+      this.isPointerLocked = document.pointerLockElement === this.attachedEl;
+      if (!this.isPointerLocked) {
+        // zero out deltas when unlocking to avoid stale movement
+        this.inputState.mouseMovementX = 0;
+        this.inputState.mouseMovementY = 0;
+      }
+    });
+
+    // Window focus management
+    this.addListener(window, 'blur', () => this.clearInputState());
+    this.addListener(window, 'focus', () => this.clearInputState());
   }
 
-  private handleKeyDown(event: any): void {
+  detach(): void {
+    // Remove all listeners added since last attach
+    for (const fn of this.cleanupFns) {
+      try { fn(); } catch { /* noop */ }
+    }
+    this.cleanupFns = [];
+    this.attachedEl = null;
+    this.isPointerLocked = false;
+    this.clearInputState();
+  }
+
+  private setupInputListeners(): void {
+    // Kept for backward compatibility if ever called; route to document-less attach (no-op)
+    // Prefer attach(target) from orchestrator.
+  }
+
+  private handleKeyDown(event: globalThis.KeyboardEvent): void {
     // Add to buffer for responsive input
     this.keyBuffer.set(event.code, Date.now());
 
@@ -196,7 +245,7 @@ export class InputSystem extends System {
     }
   }
 
-  private handleKeyUp(event: any): void {
+  private handleKeyUp(event: globalThis.KeyboardEvent): void {
     switch (event.code) {
       case 'KeyW':
         this.inputState.w = false;
@@ -229,8 +278,10 @@ export class InputSystem extends System {
   }
 
   private requestPointerLock(): void {
-    if (!this.isPointerLocked) {
-      document.body.requestPointerLock();
+    if (!this.isPointerLocked && this.attachedEl) {
+      // Focus first so browsers deliver keys to the element
+      this.attachedEl.focus({ preventScroll: true });
+      this.attachedEl.requestPointerLock();
     }
   }
 
@@ -282,6 +333,10 @@ export class InputSystem extends System {
   // Public methods to access input state
   getInputState(): Readonly<InputState> {
     return this.inputState;
+  }
+
+  getAttachedElement(): globalThis.HTMLElement | null {
+    return this.attachedEl;
   }
 
   isKeyPressed(key: keyof InputState): boolean {

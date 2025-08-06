@@ -1,7 +1,8 @@
 /**
- * Physics-related components (Rapier-aligned)
+ * Physics-related components (Rapier-aligned for React/R3F orchestration)
  * - ECS remains the source of truth; Rapier handles are cached for lookups.
- * - Avoid Cannon-specific fields; use discriminated unions for collider shapes.
+ * - Pure data only: no Three.js or Rapier imports here to keep components portable.
+ * - Discriminated unions for collider shapes; values consumed by PhysicsSystem.
  */
 
 // Vector utility types kept simple to avoid importing Three in components.
@@ -14,16 +15,18 @@ export interface Vec3 {
 // Intent velocity (optional). Source of truth for simulation lives in Rapier.
 export type VelocityComponent = Vec3;
 
-// Rapier body kinds
-export type RigidBodyKind =
-  | 'dynamic'
-  | 'kinematicVelocity'
-  | 'kinematicPosition'
-  | 'fixed';
+/**
+ * Rapier body kinds
+ * Matches @react-three/rapier / Rapier core concepts, but we keep it as strings in ECS.
+ */
+export type RigidBodyKind = 'dynamic' | 'kinematicVelocity' | 'kinematicPosition' | 'fixed';
 
 // Rigid body definition compatible with Rapier
 export interface RigidBodyComponent {
-  /** Rapier rigid body handle (set by PhysicsSystem when created) */
+  /**
+   * Rapier rigid body handle (set by PhysicsSystem when created).
+   * This is an opaque identifier (number) mapped by PhysicsSystem; not serialized.
+   */
   handle?: number;
 
   /** Rapier body type */
@@ -47,18 +50,25 @@ export interface RigidBodyComponent {
   linearVelocity?: Vec3;
   angularVelocity?: Vec3;
 
-  /** Collision/solver bitmasks (16-bit groups typical) */
+  /**
+   * Collision groups bitfield packed as per Rapier interaction groups.
+   * Suggested packing: ((membership & 0xFFFF) << 16) | (filter & 0xFFFF)
+   */
   collisionGroups?: number;
+  /** Solver groups bitfield */
   solverGroups?: number;
 }
 
-// Collider discriminated union (Rapier)
+/**
+ * Collider discriminated union (Rapier)
+ * Note: Use Float32Array/Uint32Array for mesh data to avoid copying; creators should supply typed arrays.
+ */
 export type ColliderShape =
-  | { type: 'cuboid'; halfExtents: Vec3 }                  // half extents
-  | { type: 'ball'; radius: number }                       // radius
-  | { type: 'capsule'; radius: number; halfHeight: number } // radius, half-height (center to cap start)
-  | { type: 'trimesh'; vertices: Float32Array; indices: Uint32Array } // indexed triangle mesh
-  | { type: 'heightfield'; heights: number[][]; scale: Vec3 }; // heights[y][x], scale per axis
+  | { type: 'cuboid'; halfExtents: Vec3 }                                 // half extents
+  | { type: 'ball'; radius: number }                                      // radius
+  | { type: 'capsule'; radius: number; halfHeight: number }               // radius, half-height (center to cap start)
+  | { type: 'trimesh'; vertices: Float32Array; indices: Uint32Array }     // indexed triangle mesh
+  | { type: 'heightfield'; heights: number[][]; scale: Vec3 };            // heights[y][x], scale per axis
 
 export interface ColliderOffset {
   position: Vec3;
@@ -74,9 +84,14 @@ export interface ColliderComponent {
   friction?: number;
   sensor?: boolean;
 
-  /** Rapier event/activity flags and groups */
+  /**
+   * Event/activity flags (bitfields mirrored from Rapier constants at usage sites).
+   * Keep as numbers here to avoid importing Rapier in components.
+   */
   activeEvents?: number;
   activeCollisionTypes?: number;
+
+  /** Group bitfields (see RigidBodyComponent doc above) */
   collisionGroups?: number;
   solverGroups?: number;
 
@@ -84,7 +99,10 @@ export interface ColliderComponent {
   offset?: ColliderOffset;
 }
 
-/** Optional character controller component for kinematic player movement */
+/**
+ * Optional character controller component for kinematic player movement.
+ * Consumed by MovementSystem and PhysicsSystem; keeps parameters declarative.
+ */
 export interface CharacterControllerComponent {
   mode: 'kinematicVelocity';
   slopeLimitDeg: number;
@@ -111,7 +129,7 @@ export const createRigidBodyComponent = (
   canSleep: true,
   ccd: false,
   lockRot: false,
-  ...opts
+  ...opts,
 });
 
 export const createCuboidCollider = (
@@ -122,7 +140,7 @@ export const createCuboidCollider = (
   restitution: 0,
   friction: 1,
   sensor: false,
-  ...options
+  ...options,
 });
 
 export const createBallCollider = (
@@ -133,7 +151,7 @@ export const createBallCollider = (
   restitution: 0,
   friction: 1,
   sensor: false,
-  ...options
+  ...options,
 });
 
 export const createCapsuleCollider = (
@@ -145,7 +163,7 @@ export const createCapsuleCollider = (
   restitution: 0,
   friction: 1,
   sensor: false,
-  ...options
+  ...options,
 });
 
 export const createTrimeshCollider = (
@@ -157,7 +175,7 @@ export const createTrimeshCollider = (
   restitution: 0,
   friction: 1,
   sensor: false,
-  ...options
+  ...options,
 });
 
 export const createHeightfieldCollider = (
@@ -169,5 +187,5 @@ export const createHeightfieldCollider = (
   restitution: 0,
   friction: 1,
   sensor: false,
-  ...options
+  ...options,
 });

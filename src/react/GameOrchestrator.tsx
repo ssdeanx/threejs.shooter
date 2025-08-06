@@ -13,6 +13,8 @@ import { EntityManagerContext } from '@/react/ecs-bindings.js';
 import { CombatSystem } from '@/systems/CombatSystem.js';
 import { ScoringSystem } from '@/systems/ScoringSystem.js';
 import { createWeaponComponent, createAimComponent, createScoreComponent } from '@/components/GameplayComponents.js';
+import type { PositionComponent } from '@/components/TransformComponents.js';
+import type { VelocityComponent } from '@/components/PhysicsComponents.js';
 
 /**
  * GameOrchestrator mounts inside R3F Canvas and owns the single authoritative loop via useFrame.
@@ -37,6 +39,8 @@ export function GameOrchestrator() {
 
     // Systems
     const renderSystem = new RenderSystem(scene, entityManager);
+    // IMPORTANT: ensure the visual terrain/heightfield exists before physics init.
+    // RenderSystem.createVisualGround() runs in its constructor, so heightfield is available now.
     const hf: TerrainHeightfield | null = renderSystem.getHeightfield();
 
     const physicsSystem = new PhysicsSystem(entityManager);
@@ -165,8 +169,69 @@ export function GameOrchestrator() {
     // Async Rapier init
     let rapierReady = false;
     (async () => {
-      await physicsSystem.init(hf ?? null);
+      console.log('[BOOT] Starting physics init…');
+
+      // If heightfield is somehow not ready, wait one microtask to allow RenderSystem constructor to finish.
+      const ensureHeightfield = (): TerrainHeightfield | null => renderSystem.getHeightfield();
+      let terrainHF: TerrainHeightfield | null = ensureHeightfield();
+      if (!terrainHF) {
+        console.warn('[BOOT] Heightfield not immediately available; retrying on next microtask');
+        await Promise.resolve();
+        terrainHF = ensureHeightfield();
+      }
+      console.log('[BOOT] Heightfield status:', !!terrainHF, terrainHF && {
+        rows: terrainHF.heights.length,
+        cols: terrainHF.heights[0]?.length,
+        elementSize: terrainHF.elementSize
+      });
+
+      // Force flat ground (heightfield disabled for stability until green plane verified)
+      await physicsSystem.init(null);
       rapierReady = true;
+      console.log('[BOOT] Physics ready (heightfield disabled; flat plane active)');
+
+      // Snap player down to ground once physics is ready to avoid floating spawn due to initial dt clamp.
+      // Use a short raycast from above to find the terrain and place the player slightly above hit point.
+      try {
+        // Find the first entity with PlayerControllerComponent
+        const {entities} = entityManager as unknown as { entities?: Set<number> };
+        let snapped = false;
+        if (entities && entities.size > 0) {
+          for (const eid of entities) {
+            const pc = entityManager.getComponent(eid, 'PlayerControllerComponent');
+            const pos = entityManager.getComponent<PositionComponent>(eid, 'PositionComponent');
+            // We don’t need rb shape here; presence indicates a physics body exists/will be created
+            const rb = entityManager.getComponent(eid, 'RigidBodyComponent');
+            if (pc && pos && rb) {
+              const origin = new THREE.Vector3(pos.x, pos.y + 2, pos.z);
+              const dir = new THREE.Vector3(0, -1, 0);
+              const hit = physicsSystem.raycast(origin, dir, 50, true);
+              console.log('[BOOT] Player ground raycast:', {
+                origin: origin.toArray(),
+                hit: !!hit,
+                point: hit?.point && hit.point.toArray(),
+                normal: hit?.normal && hit.normal.toArray(),
+                toi: hit?.toi
+              });
+              if (hit) {
+                pos.x = hit.point.x;
+                pos.y = hit.point.y + 0.9; // stand a bit above ground
+                pos.z = hit.point.z;
+                // zero initial velocity so we don't slide before inputs
+                const vel = entityManager.getComponent<VelocityComponent>(eid, 'VelocityComponent');
+                if (vel) { vel.x = 0; vel.y = 0; vel.z = 0; }
+                snapped = true;
+              }
+              console.log('[BOOT] Player spawn pos after snap:', { x: pos.x, y: pos.y, z: pos.z }, { snapped });
+              break;
+            }
+          }
+        } else {
+          console.warn('[BOOT] No entities set found to snap player');
+        }
+      } catch (err) {
+        console.warn('[BOOT] Player snap failed', err);
+      }
     })().catch((e) => {
       console.error('Physics init failed', e);
     });

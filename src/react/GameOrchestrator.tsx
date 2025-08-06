@@ -174,32 +174,48 @@ export function GameOrchestrator() {
   const accumulatorRef = useRef(0);
   const lastRef = useRef<number | null>(null);
   const FIXED_DT = 1 / 60;
-useFrame(({ clock }) => {
-  // R3F already schedules render; we only step ECS/Physics deterministically
-  const now = clock.getElapsedTime();
-  if (lastRef.current == null) {
+
+  // Optional interpolation planning scaffold (disabled by default to keep authoritative visuals)
+  // If enabled in the future, store previous and current transforms here and blend in view layer only.
+  // Keeping this scaffold satisfies P2 planning without changing current behavior.
+  const interpolation = useRef({
+    enabled: false,
+    alpha: 0, // blend factor for future visual interpolation
+  });
+
+  useFrame(({ clock }) => {
+    // R3F already schedules render; we only step ECS/Physics deterministically
+    const now = clock.getElapsedTime();
+    if (lastRef.current == null) {
+      lastRef.current = now;
+      return;
+    }
+    let dt = now - lastRef.current;
     lastRef.current = now;
-    return;
-  }
-  let dt = now - lastRef.current;
-  lastRef.current = now;
 
-  // clamp dt to avoid spiral of death when tab resumes
-  dt = Math.min(dt, 0.25);
+    // clamp dt to avoid spiral of death when tab resumes
+    dt = Math.min(dt, 0.25);
 
-  accumulatorRef.current += dt;
+    accumulatorRef.current += dt;
 
-  // Only tick after Rapier is ready
-  if (!(boot.rapierReadyRef.ready)) {
-    return;
-  }
+    // Only tick after Rapier is ready
+    if (!(boot.rapierReadyRef.ready)) {
+      return;
+    }
 
-  // Step fixed-update systems; CameraSystem receives the same R3F camera reference
-  while (accumulatorRef.current >= FIXED_DT) {
-    boot.entityManager.updateSystems(FIXED_DT);
-    accumulatorRef.current -= FIXED_DT;
-  }
-});
+    // Step fixed-update systems; CameraSystem receives the same R3F camera reference
+    while (accumulatorRef.current >= FIXED_DT) {
+      boot.entityManager.updateSystems(FIXED_DT);
+      accumulatorRef.current -= FIXED_DT;
+    }
+
+    // Compute interpolation alpha for potential view-only smoothing (currently unused)
+    if (interpolation.current.enabled) {
+      interpolation.current.alpha = accumulatorRef.current / FIXED_DT;
+    } else {
+      interpolation.current.alpha = 0;
+    }
+  });
 
 // Provide EntityManager to React subtree for view-only bindings.
 // We don't add Three objects here because RenderSystem manages scene content.

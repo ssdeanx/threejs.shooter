@@ -1,11 +1,15 @@
 import React, { useMemo } from 'react';
 import * as THREE from 'three';
 import { Canvas, useThree } from '@react-three/fiber';
-import { GameOrchestrator } from './GameOrchestrator';
-import PostFX from './PostFX';
+import { GameOrchestrator } from '@/react/GameOrchestrator.js';
+import PostFX from '@/react/PostFX.js';
 import { BindTransform, useEntityManager } from '@/react/ecs-bindings.js';
 
 const ENABLE_POSTFX = false;
+
+// Feature flags for diagnostics and examples
+const ENABLE_SMOKE = false;
+const ENABLE_GLTF_EXAMPLE = false;
 
 /**
  * DemoFollowerBox
@@ -63,6 +67,52 @@ function DemoFollowerBox(): React.ReactElement | null {
   );
 }
 
+/**
+ * Smoke — minimal diagnostics component to mount optional helpers/examples behind flags.
+ * Keeps production clean while providing a quick sanity surface for development.
+ */
+function Smoke(): React.ReactElement | null {
+  if (!ENABLE_SMOKE) return null;
+  return (
+    <>
+      {/* Minimal demo view binding */}
+      <DemoFollowerBox />
+    </>
+  );
+}
+
+/**
+ * Optional GLTF example showcasing Suspense-friendly loading.
+ * Disabled by default via feature flag to avoid changing visuals.
+ */
+function GltfExample(): React.ReactElement | null {
+  if (!ENABLE_GLTF_EXAMPLE) return null;
+
+  // Use dynamic import to stay ESM + satisfy lint rules
+  const LazyGltf = React.lazy(async () => {
+    const mod = await import('@/react/hooks/useGlbAsset.js');
+    return {
+      default: function Inner() {
+        const { scene } = mod.useGlbAsset('assets/models/targets/crate.glb');
+        const { scene: r3fScene } = useThree();
+        useMemo(() => {
+          r3fScene.add(scene);
+          return () => {
+            r3fScene.remove(scene);
+          };
+        }, [r3fScene, scene]);
+        return <primitive object={scene} />;
+      }
+    };
+  });
+
+  return (
+    <React.Suspense fallback={null}>
+      <LazyGltf />
+    </React.Suspense>
+  );
+}
+
 export default function App() {
   return (
     <Canvas
@@ -72,8 +122,8 @@ export default function App() {
       style={{ width: '100vw', height: '100vh', display: 'block' }}
     >
       <GameOrchestrator />
-      {/* Minimal demo view binding */}
-      <DemoFollowerBox />
+      <Smoke />
+      <GltfExample />
       <PostFX enabled={ENABLE_POSTFX} />
     </Canvas>
   );

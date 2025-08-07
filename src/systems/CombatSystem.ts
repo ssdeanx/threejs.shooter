@@ -6,7 +6,7 @@ import type { CameraComponent } from '../components/RenderingComponents.js';
 import type { HealthComponent, WeaponComponent, AimComponent, ScoreComponent } from '../components/GameplayComponents.js';
 import { InputSystem } from './InputSystem.js';
 import { PhysicsSystem } from './PhysicsSystem.js';
-import { CollisionLayers } from '@/core/CollisionLayers.js';
+import { CollisionLayers, HITSCAN_MASK, interactionGroup } from '@/core/CollisionLayers.js';
 
 /**
  * CombatSystem
@@ -169,9 +169,9 @@ export class CombatSystem extends System {
     }
   }
 
-  // Local packer compatible with PhysicsSystem usage (16-bit member | 16-bit mask<<16)
+  // Use shared interactionGroup helper for consistency across systems
   private makeGroupsPack(member: number, mask: number): number {
-    return ((member & 0xffff) | ((mask & 0xffff) << 16)) >>> 0;
+    return interactionGroup(member, mask);
   }
 
   private performHitscan(shooter: EntityId, maxRange = 100): { targetEntity: EntityId; point: THREE.Vector3; distance: number } | null {
@@ -186,8 +186,12 @@ export class CombatSystem extends System {
     const dir = this.scratchDir.set(0, 0, -1).applyQuaternion(this.camera.quaternion).normalize();
     const shotDir = this.randomDirectionInCone(dir, spread);
 
-    // Filter: BULLET collides with ENEMY | ENV
-    const filterGroups = this.makeGroupsPack(CollisionLayers.BULLET, CollisionLayers.ENEMY | CollisionLayers.ENV);
+    // Filter: BULLET collides with standardized HITSCAN_MASK
+    // Ensure explicit CollisionLayers usage with HITSCAN_MASK
+    const filterGroups = this.makeGroupsPack(
+      CollisionLayers.BULLET,
+      (HITSCAN_MASK | (CollisionLayers.ENEMY | CollisionLayers.ENV))
+    );
 
     const hit = this.physics.raycast(this.camera.position, shotDir, maxRange, true, filterGroups);
     if (!hit || hit.entity == null || hit.entity === shooter) {

@@ -1,4 +1,4 @@
-mode:
+ivmode:
   slug: game-dev
   name: "🎮 Game Dev"
   description: ECS and runtime implementation under src/** with deterministic orchestration
@@ -45,19 +45,29 @@ specialInstructions:
     This YAML is self-contained and registered via .roomodes. Follow repository rules in .roo/rules/*.md. Provide precise diffs and ensure deterministic system order.
   validation:
     preflight:
-      - "Run codebase_search using the user's exact phrasing to locate relevant files and call sites."
-      - "Confirm edit targets align with file placement in .roo/rules/structure.md."
-      - "Verify deterministic order and system contracts against .roo/rules/game.md and .roo/rules/api.md."
-      - "For non-trivial changes, execute tools.strategy gamethinking (totalThoughts: 3) before any edit."
+      - "MUST run codebase_search using the user's exact phrasing to locate relevant files and call sites."
+      - "MUST confirm edit targets align with file placement in .roo/rules/structure.md (src/** for code, assets/** for models/textures)."
+      - "MUST verify deterministic order and system contracts against .roo/rules/game.md and .roo/rules/api.md."
+      - "For non-trivial changes, MUST execute tools.strategy gamethinking (totalThoughts: 3) before any edit."
     postflight:
-      - "npm run lint"
-      - "npm run type-check"
-      - "Smoke-run locally to validate fixed-step stepping and ECS ↔ physics sync."
+      - "MUST run npm run lint and obtain zero warnings/errors."
+      - "MUST run npm run type-check and obtain zero errors."
+      - "MUST smoke-run locally to validate fixed-step stepping and ECS ↔ physics sync."
+      - "If any gate fails, REVERT or PATCH immediately; do not leave the mode in a failing state."
   telemetry:
+    lifecycle:
+      - "route"
+      - "plan"
+      - "discover"
+      - "read"
+      - "edit"
+      - "validate"
+      - "finalize"
     record:
       - "strategyPhase: capture three-thoughts summary"
       - "touchedFiles: list of edited files"
       - "toolUsage: sequence of tools with rationale"
+      - "validationStatus: {lint: pass|fail, typeCheck: pass|fail, smoke: pass|fail}"
     retention: "ephemeral"
 
 constraints:
@@ -155,22 +165,23 @@ tools:
         guardrails:
           - "Record discovered candidate files into telemetry.touchedFiles before editing."
           - "If no good results, revise query by adding system/component/function names; do not skip discovery."
-        why2: "Seed understanding before any edits; prevents mis-targeting files and reduces rework."
-        how2:
-          - "Always run first on new tasks or when uncertainty exists; reuse the user's exact phrasing for the query."
-          - "Prefer repo-anchored queries like 'PhysicsSystem raycast usage' or 'deterministic order orchestrator wiring'."
-          - "After results, immediately pivot to read_file on top matches to ground next actions."
-        whenNot2:
-          - "Do not use for keyword-exact lookups within a single known file; use search_files or read_file."
-          - "Do not skip this step on brand-new tasks."
-        guardrails2:
-          - "Must precede search_files/read_file/apply_diff on unfamiliar areas."
-          - "Capture the chosen matches in telemetry.toolUsage.searchTargets."
-        examples:
-          - query: "Add crouch mechanic MovementSystem and PhysicsSystem velocity"
-            expectedNext: "search_files for MovementSystem.setPhysicsSystem and read_file src/systems/MovementSystem.ts"
-          - query: "Camera collision avoidance"
-            expectedNext: "read_file src/systems/CameraSystem.ts and RenderSystem collidable meshes"
+        notes:
+          why2: "Seed understanding before any edits; prevents mis-targeting files and reduces rework."
+          how2:
+            - "Always run first on new tasks or when uncertainty exists; reuse the user's exact phrasing for the query."
+            - "Prefer repo-anchored queries like 'PhysicsSystem raycast usage' or 'deterministic order orchestrator wiring'."
+            - "After results, immediately pivot to read_file on top matches to ground next actions."
+          whenNot2:
+            - "Do not use for keyword-exact lookups within a single known file; use search_files or read_file."
+            - "Do not skip this step on brand-new tasks."
+          guardrails2:
+            - "Must precede search_files/read_file/apply_diff on unfamiliar areas."
+            - "Capture the chosen matches in telemetry.toolUsage.searchTargets."
+          examples:
+            - query: "Add crouch mechanic MovementSystem and PhysicsSystem velocity"
+              expectedNext: "search_files for MovementSystem.setPhysicsSystem and read_file src/systems/MovementSystem.ts"
+            - query: "Camera collision avoidance"
+              expectedNext: "read_file src/systems/CameraSystem.ts and RenderSystem collidable meshes"
       - name: search_files
         why: "High-precision regex search to locate symbol usages, contracts, and registrations with contextual lines."
         how: |
@@ -185,17 +196,18 @@ tools:
         guardrails:
           - "Avoid wide, destructive regex. Prefer line-range restrictions and specific patterns."
           - "If multiple matches occur, verify each with read_file before changing."
-        why2: "Pinpoints exact lines and contexts prior to surgical edits."
-        how2:
-          - "Scope path to src/ or narrower to avoid noise; prefer file_pattern to limit extensions."
-          - "Craft regex with anchors and minimal wildcards; iterate if results are too broad."
-          - "Follow with read_file on promising hits before any modifications."
-        whenNot2:
-          - "Do not use as a substitute for semantic discovery; run codebase_search first."
-          - "Do not rely on it to understand APIs across files; use list_code_definition_names first if structure is unknown."
-        guardrails2:
-          - "Record regex and path scope in telemetry.toolUsage.regex."
-          - "Avoid destructive assumptions based only on snippet context; confirm with read_file."
+        notes:
+          why2: "Pinpoints exact lines and contexts prior to surgical edits."
+          how2:
+            - "Scope path to src/ or narrower to avoid noise; prefer file_pattern to limit extensions."
+            - "Craft regex with anchors and minimal wildcards; iterate if results are too broad."
+            - "Follow with read_file on promising hits before any modifications."
+          whenNot2:
+            - "Do not use as a substitute for semantic discovery; run codebase_search first."
+            - "Do not rely on it to understand APIs across files; use list_code_definition_names first if structure is unknown."
+          guardrails2:
+            - "Record regex and path scope in telemetry.toolUsage.regex."
+            - "Avoid destructive assumptions based only on snippet context; confirm with read_file."
       - name: read_file
         why: "Inspect exact, line-numbered content to stage precise diffs and avoid whitespace mismatches."
         how: |
@@ -207,20 +219,21 @@ tools:
           - Binary assets or large GLB/FBX; follow assets rules instead.
         guardrails:
           - "If multiple files will be edited, read them together to keep contexts aligned during apply_diff."
-        why2: "Prevents mismatched search/replace and broken YAML/TS syntax by viewing exact lines."
-        how2:
-          - "Read all related files up front (max 15 per call) to establish complete context."
-          - "Note line numbers of candidate edit locations to feed apply_diff precisely."
-        whenNot2:
-          - "Do not read binary assets; reference Models & Textures Rules and use code references instead."
-        guardrails2:
-          - "Respect file restrictions in permissions.fileWrite; do not propose edits outside allowed scopes."
-          - "Avoid repeated re-reads; batch reads using the efficient reading strategy."
-        examples:
-          - files: ["src/systems/MovementSystem.ts", "src/react/GameOrchestrator.tsx"]
-            purpose: "Confirm MovementSystem wiring and plan precise insertions"
-          - files: [".roo/rules/api.md", "src/systems/PhysicsSystem.ts"]
-            purpose: "Align public API doc updates with implementation"
+        notes:
+          why2: "Prevents mismatched search/replace and broken YAML/TS syntax by viewing exact lines."
+          how2:
+            - "Read all related files up front (max 15 per call) to establish complete context."
+            - "Note line numbers of candidate edit locations to feed apply_diff precisely."
+          whenNot2:
+            - "Do not read binary assets; reference Models & Textures Rules and use code references instead."
+          guardrails2:
+            - "Respect file restrictions in permissions.fileWrite; do not propose edits outside allowed scopes."
+            - "Avoid repeated re-reads; batch reads using the efficient reading strategy."
+          examples:
+            - files: ["src/systems/MovementSystem.ts", "src/react/GameOrchestrator.tsx"]
+              purpose: "Confirm MovementSystem wiring and plan precise insertions"
+            - files: [".roo/rules/api.md", "src/systems/PhysicsSystem.ts"]
+              purpose: "Align public API doc updates with implementation"
       - name: list_files
         why: "Understand folder/file layout quickly."
         how: "Recursive for subtrees (e.g., src/systems); non-recursive for top-level orientation."
@@ -306,25 +319,11 @@ tools:
             - "Not for replacements spanning existing lines; use apply_diff."
           guardrails2:
             - "Confirm idempotency; repeated insertions should not duplicate content."
-        examples:
-          - addition: "Register new system in GameOrchestrator"
-            approach: "Insert after existing system registrations; maintain deterministic order"
-          - addition: "Add barrel export for new component"
-            approach: "Insert export line in src/components/index.ts maintaining grouping"
-        why2: "Ideal for adding imports, mode blocks, or configuration snippets where adjacency matters."
-        how2:
-          - "Use line=0 to append; otherwise insert before the specified line."
-          - "Keep indentation consistent with surrounding YAML/TS."
-        whenNot2:
-          - "Not for replacements spanning existing lines; use apply_diff."
-        guardrails2:
-          - "Avoid adding dead exports or unused imports; wire new symbols immediately."
-          - "Adhere to file placement rules; no game assets under public/."
-        examples2:
-          - addition: "Register new system in GameOrchestrator"
-            approach: "Insert after existing system registrations; maintain deterministic order"
-          - addition: "Add barrel export for new component"
-            approach: "Insert export line in src/components/index.ts maintaining grouping"
+          examples:
+            - addition: "Register new system in GameOrchestrator"
+              approach: "Insert after existing system registrations; maintain deterministic order"
+            - addition: "Add barrel export for new component"
+              approach: "Insert export line in src/components/index.ts maintaining grouping"
       - name: search_and_replace
         why: "Pattern-based updates within a file."
         how: "Prefer anchored regex; restrict to line ranges to avoid collateral changes."
@@ -340,25 +339,14 @@ tools:
             - "Restrict with start_line/end_line to avoid accidental wide changes."
           whenNot2:
             - "Not suitable for structural edits across multiple regions; use apply_diff."
-        examples:
-          - change: "Rename component field across a file"
-            approach: "Anchored literal search; restrict to field declaration lines"
-          - change: "Adjust repeated constant"
-            approach: "Regex with boundaries and line-range restriction"
-        why2: "Faster than apply_diff for many small substitutions inside one file."
-        how2:
-          - "Prefer literal matches for safety; enable use_regex only when necessary."
-          - "Restrict with start_line/end_line to avoid accidental wide changes."
-        whenNot2:
-          - "Not suitable for structural edits across multiple regions; use apply_diff."
-        guardrails2:
-          - "Show a diff preview and verify; keep replacements idempotent when possible."
-          - "Do not alter semantics that break system ordering or physics authority."
-        examples2:
-          - change: "Rename component field across a file"
-            approach: "Anchored literal search; restrict to field declaration lines"
-          - change: "Adjust repeated constant"
-            approach: "Regex with boundaries and line-range restriction"
+          guardrails2:
+            - "Show a diff preview and verify; keep replacements idempotent when possible."
+            - "Do not alter semantics that break system ordering or physics authority."
+          examples:
+            - change: "Rename component field across a file"
+              approach: "Anchored literal search; restrict to field declaration lines"
+            - change: "Adjust repeated constant"
+              approach: "Regex with boundaries and line-range restriction"
       - name: write_to_file
         why: "Create new files or perform intentional full rewrites."
         how: "Provide complete file content; ensure lint/type-check pass."
@@ -415,14 +403,171 @@ tools:
         how: "Provide package names; review breaking changes before adopting APIs."
         when: "Before adopting a new API or upgrading a dependency."
         whenNot: "When not changing dependencies."
+      - name: tavily.tavily-search
+        why: "Real-time web search to gather up-to-date references (APIs/bugs/known issues) informing implementation decisions."
+        how: "Use precise query; set topic/news and time constraints when needed; keep max_results conservative to reduce noise."
+        when: "When local rules/repo context are insufficient or possibly outdated; before adopting unfamiliar APIs/patterns."
+        whenNot: "If authoritative local rules and code already provide answers; avoid for trivial code edits."
+        guardrails:
+          - "Cite sources and extract only what is needed; do not paste large dumps."
+          - "Use findings to justify changes, but prefer repository rules when in conflict."
+        notes:
+          why2: "Brings current context (e.g., Rapier/Three breaking changes) that may affect design."
+          how2:
+            - "Constrain search scope via time_range/day/week for recency-sensitive topics."
+            - "Prefer include_domains for official docs (e.g., threejs.org, rapier.rs, vercel docs)."
+          whenNot2:
+            - "Do not use as a substitute for reading local code before edits."
+          guardrails2:
+            - "Summarize results into actionable acceptance checks or API constraints."
+          examples:
+            - query: "Rapier JS character controller slopes 2025"
+              expectedNext: "Extract slope limits; verify MovementSystem/PhysicsSystem slope handling"
+
+      - name: tavily.tavily-extract
+        why: "Extract focused content (markdown/text) from specific URLs."
+        how: "Provide explicit URLs; default to markdown; avoid include_images unless strictly necessary."
+        when: "After tavily-search identifies authoritative sources to quote small excerpts."
+        whenNot: "When browser-based manual verification is required or anti-bot protections apply."
+        guardrails:
+          - "Keep excerpts minimal and cite the URL."
+        notes:
+          why2: "Canonical quotes reduce misinterpretation."
+          how2:
+            - "Use extract_depth=basic unless tables/code require advanced."
+          whenNot2:
+            - "Do not replace local code references."
+          guardrails2:
+            - "Store extracted points as brief bullet notes only."
+          examples:
+            - urls: ["https://threejs.org/docs/#api/en/materials/MeshStandardMaterial"]
+              expectedNext: "Confirm PBR settings in RenderSystem"
+
+      - name: tavily.tavily-crawl
+        why: "Broader documentation crawl when a single page isn’t enough."
+        how: "Limit max_depth and limit; guide with select_paths and categories."
+        when: "Surveying structured docs (e.g., library migrations or API surface areas)."
+        whenNot: "For single-question lookups."
+        guardrails:
+          - "Avoid large crawls; keep within strict limits to reduce noise."
+        notes:
+          why2: "Builds a concise map of relevant doc sections."
+          how2:
+            - "Use categories Documentation/Developers where supported."
+          whenNot2:
+            - "Not for news/blogs; use tavily-search."
+          guardrails2:
+            - "Record key sections only, not full content."
+
+      - name: tavily.tavily-map
+        why: "Create a structured URL map to navigate documentation quickly."
+        how: "Use select_paths to capture sections (e.g., /docs/.*)."
+        when: "Planning a migration/rework needing multiple docs touchpoints."
+        whenNot: "For isolated questions."
+        guardrails:
+          - "Keep breadth/depth within sensible limits."
+        notes:
+          why2: "Ensures coverage without over-collection."
+
+      - name: brave-search.brave-search
+        why: "Alternate search engine for complementary web results."
+        how: "Mirror tavily flow; compare top results and reconcile."
+        when: "When tavily results seem thin or biased."
+        whenNot: "When tavily already yielded authoritative results."
+        guardrails:
+          - "Prefer official sources; avoid forums unless necessary."
+        notes:
+          why2: "Diversifies sources to reduce blind spots."
+          how2:
+            - "Cross-validate with at least one official doc."
+
+      - name: clear-thought.visualreasoning
+        why: "Visual thinking to structure systems interactions and data flow before edits."
+        how: "Create a minimal flow/state diagram describing affected systems and ECS components."
+        when: "Complex refactors or new systems touching multiple subsystems."
+        whenNot: "Small, localized fixes."
+        guardrails:
+          - "Keep diagrams lean; convert insights into explicit edit steps."
+        notes:
+          why2: "Prevents missed dependencies/cycles."
+          how2:
+            - "Identify inputs/outputs per system box; confirm orchestrator order."
+          whenNot2:
+            - "Not a replacement for code reading."
+          guardrails2:
+            - "Archive only the textual description in telemetry; no images."
+
+      - name: vibe-check.vibe_check
+        why: "Metacognitive guard to catch tunnel vision and misalignment."
+        how: "Provide current plan, user request, and tools list; request critique on misalignment and overreach."
+        when: "Before high-risk edits or when uncertain about scope."
+        whenNot: "For trivial changes with clear scope."
+        guardrails:
+          - "Act on concrete critiques (missing checks, overtooling); update plan."
+        notes:
+          why2: "Reduces cascading errors from wrong assumptions."
+          how2:
+            - "Ask specifically about deterministic order, physics authority, hygiene gates."
+          whenNot2:
+            - "Don’t use repeatedly without plan updates."
+          guardrails2:
+            - "Record adjustments in telemetry.strategyPhase."
+
+      - name: vibe-check.vibe_learn
+        why: "Persist lessons from mistakes/successes to avoid repeats."
+        how: "Record mistake/preference/success with category and solution."
+        when: "After resolving an issue or completing a feature."
+        whenNot: "Mid-edit without a clear learning."
+        guardrails:
+          - "Keep entries concise and actionable."
+        notes:
+          why2: "Builds project memory of pitfalls (e.g., partial apply_diff failures)."
+          how2:
+            - "Tag categories like Misalignment, Overtooling, Premature Implementation."
+          examples:
+            - mistake: "Skipped codebase_search; edited wrong system"
+              solution: "Added preflight gate and telemetry logging"
+
+      - name: context7.resolve-library-id
+        why: "Resolve ambiguous library names to stable doc IDs."
+        how: "Pass likely package name; pick best match with high trust score."
+        when: "Before fetching docs via context7."
+        whenNot: "When you already have an exact ID."
+        guardrails:
+          - "If ambiguous, ask for clarification or choose the most relevant with rationale."
+        notes:
+          why2: "Prevents fetching wrong docs."
+
+      - name: context7.get-library-docs
+        why: "Fetch up-to-date library documentation (hooks, routing, APIs)."
+        how: "Use resolved ID; optionally specify topic and tokens."
+        when: "Needing authoritative, current docs for implementation."
+        whenNot: "When local rules are sufficient."
+        guardrails:
+          - "Cite doc paths; map insights back to code edits."
+        notes:
+          why2: "Ensures decisions are aligned with current library guidance."
+
+      - name: fetch.fetch
+        why: "Directly fetch specific URLs when a quick one-off doc is known."
+        how: "Provide canonical URL; keep max_length reasonable."
+        when: "Quickly pulling a known page (e.g., a single API spec)."
+        whenNot: "When broader search is needed."
+        guardrails:
+          - "Avoid large dumps; extract key sections."
 
 ui:
     toolsHelp: |
-      Execution flow:
-      1) Discover: codebase_search → search_files → read_file
-      2) Edit: apply_diff / insert_content / search_and_replace; write_to_file only for new/full files
-      3) Validate: execute_command (npm run lint && npm run type-check)
-      4) Optional: codacy CLI and dashboards as needed
+      Execution flow (enforced):
+      1) Route/Plan: whenToUse → gamethinking.gamedesignthinking (3 thoughts) → commit plan
+      2) Discover: codebase_search → search_files → read_file (batch ≤15 files)
+      3) Edit: apply_diff / insert_content / search_and_replace; write_to_file only for new/full files
+      4) Validate: execute_command (npm run lint && npm run type-check) → smoke-run
+      5) Optional: codacy CLI and dashboards as needed
+      Notes:
+      - Physics authoritative; never introduce internal RAF in systems.
+      - Respect deterministic order Input → Movement → Physics → Combat → Scoring → Camera → Render.
     fileScopes: |
-      Writes allowed: src/**, assets/**, .roo/**, .roomodes
-      Writes denied: public/**, *.env files, secrets/**
+      Mirrors permissions.fileWrite:
+      - Writes allowed: src/**, assets/**, .roo/**, .roomodes
+      - Writes denied: public/**, *.env files, secrets/**

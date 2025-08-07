@@ -26,6 +26,7 @@
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "react-tracked": "^2.0.1",
+    "winston": "^3.17.0",
     "zustand": "^5.0.7",
     "zustand-computed": "^2.1.0",
     "zustand-x": "^6.1.1"

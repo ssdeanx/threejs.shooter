@@ -24,11 +24,11 @@ Last Updated: 2025-08-07
 - Deterministic loop confirmed centralized in src/react/GameOrchestrator.tsx with accumulator.
 
 3. Next Steps (Execution-Ready)
-- Collision masks finalization
-  - Define and document interaction groups for PLAYER, ENEMY, ENV, CAMERA_BLOCKER, BULLET in src/core/CollisionLayers.ts.
-  - Verify/standardize filters in Movement (GROUND_PROBE), Combat (HITSCAN), Camera (CAMERA_OCCLUSION).
-- Validate makeGroups behavior at runtime (InteractionGroups.fixed vs fallback interactionGroup).
-- Optional: add debug instrumentation to trace raycasts and collisions (membership/mask) during development.
+- **Collision Mask Standardization COMPLETE**: All systems (Movement, Combat, Camera) now use the canonical masks from `src/core/CollisionLayers.ts`. Redundant bitwise operations were removed, enforcing a single source of truth.
+- **Zustand vs. ECS Documentation**: Created `docs/ecs-vs-zustand.md` to formally evaluate state management strategies for gameplay logic.
+- **Next Steps**:
+  - Begin the "Wire Systems Together (Integration Pass)" to ensure a deterministic, single-loop architecture.
+  - Plan the "Options Screen on ESC" feature, ensuring UI state remains separate from the ECS.
 - Asset lifecycle and disposal
   - Standardize GLB loading/unloading (useGlbAsset) and Three object disposal paths in RenderSystem; verify no leaks.
 - @ alias migration

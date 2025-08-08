@@ -170,9 +170,6 @@ export class CombatSystem extends System {
   }
 
   // Use shared interactionGroup helper for consistency across systems
-  private makeGroupsPack(member: number, mask: number): number {
-    return interactionGroup(member, mask);
-  }
 
   private performHitscan(shooter: EntityId, maxRange = 100): { targetEntity: EntityId; point: THREE.Vector3; distance: number } | null {
     if (!this.physics) {
@@ -188,10 +185,7 @@ export class CombatSystem extends System {
 
     // Filter: BULLET collides with standardized HITSCAN_MASK
     // Ensure explicit CollisionLayers usage with HITSCAN_MASK
-    const filterGroups = this.makeGroupsPack(
-      CollisionLayers.BULLET,
-      (HITSCAN_MASK | (CollisionLayers.ENEMY | CollisionLayers.ENV))
-    );
+    const filterGroups = interactionGroup(CollisionLayers.BULLET, HITSCAN_MASK);
 
     const hit = this.physics.raycast(this.camera.position, shotDir, maxRange, true, filterGroups);
     if (!hit || hit.entity == null || hit.entity === shooter) {

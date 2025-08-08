@@ -120,6 +120,7 @@ export class MovementSystem extends System {
         this._move.add(this._tmpRight);
       }
 
+      // Normalize move vector to prevent diagonal speed boost
       const speed = controller.moveSpeed * (sprint ? controller.sprintMultiplier : 1);
 
       // 3) Project movement onto ground plane when grounded
@@ -224,7 +225,7 @@ export class MovementSystem extends System {
         dir,
         this.probeDistance,
         true,
-        (GROUND_PROBE_MASK | CollisionLayers.ENV)
+        GROUND_PROBE_MASK
       );
       if (hit) {
         anyHit = true;

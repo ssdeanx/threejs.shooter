@@ -7,6 +7,9 @@ Last Updated: 2025-08-07
 1. Purpose and Vision
 - Build a third-person shooter prototype that proves out an Authoritative ECS over a single Rapier physics world, orchestrated by a deterministic fixed-step loop inside React Three Fiber.
 - Prioritize correctness, determinism, and system hygiene to enable rapid iteration on movement, camera, and combat without architectural rework.
+- Establish a minimal yet production-grade pattern for ECS state ownership, physics integration, and rendering in a React context.
+- Provide a clean foundation for indie developers and gameplay programmers to prototype third-person mechanics with confidence in correctness and performance.
+- Tactical focus on movement, camera control, combat mechanics, and rendering fidelity, with a view to future expansion into more complex gameplay features.
 
 2. Core Goals
 - Deterministic loop at 60 Hz using fixed-step accumulator: one authoritative order for systems.
@@ -15,12 +18,18 @@ Last Updated: 2025-08-07
 - View-only React: React used for orchestration and rendering; game state is ECS-owned.
 - Collision layers defined and enforced through bitmasks and interaction groups.
 - Zero-unused, zero-stubs hygiene: no dead code, no lingering any, no partial TODOs.
+- Fully functional systems: Input, Movement, Physics, Combat, Scoring, Camera, Render.
+- Take advantage of React Three Fiber for rendering and post-processing, with a focus on performance and maintainability.
+- Break down complex tasks into manageable steps, ensuring each task is deterministic and follows the established architecture.
+- Maintain a clean and organized codebase with clear separation of concerns between systems, components, and rendering logic.
 
 3. Non-Goals
 - No dual-loop architecture (no separate render/physics game loops).
 - No multiple physics worlds in the same scene.
 - No speculative abstractions without concrete usages.
 - No stubs or placeholders merged; all systems must be functional or removed.
+- No claiming your task is done without passing hygiene checks.
+- No premature optimization, premature abstraction, or premature refactoring.
 
 4. Target Experience (UX)
 - Movement: responsive WASD with precise grounded checks, coyote time, jump control, and slope-aware projection.

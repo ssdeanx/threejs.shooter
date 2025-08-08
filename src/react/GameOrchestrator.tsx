@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react';
+import { useMemo, useRef, useContext, createContext } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 
@@ -12,6 +12,7 @@ import { SoldierSystem } from '@/systems/SoldierSystem.js';
 import { EntityManagerContext } from '@/react/ecs-bindings.js';
 import { CombatSystem } from '@/systems/CombatSystem.js';
 import { ScoringSystem } from '@/systems/ScoringSystem.js';
+import { RecorderSystem } from '@/systems/RecorderSystem.js';
 import { createWeaponComponent, createAimComponent, createScoreComponent } from '@/components/GameplayComponents.js';
 import type { PositionComponent } from '@/components/TransformComponents.js';
 import type { VelocityComponent } from '@/components/PhysicsComponents.js';
@@ -21,6 +22,12 @@ import type { VelocityComponent } from '@/components/PhysicsComponents.js';
  * It wires ECS/Physics/Systems once, then steps them at a fixed 60 Hz accumulator inside useFrame.
  * Render is owned by R3F. RenderSystem remains write-only to ECS transforms/scene graph.
  */
+const GameOrchestratorContext = createContext<any>(null);
+
+export const useGameOrchestrator = () => {
+  return useContext(GameOrchestratorContext);
+};
+
 export function GameOrchestrator() {
   const { scene, camera, gl } = useThree();
   // Provide the authoritative EntityManager to React children (bindings/hooks)
@@ -50,6 +57,7 @@ export function GameOrchestrator() {
     const cameraSystem = new CameraSystem(camera as THREE.PerspectiveCamera, entityManager, scene);
     const combatSystem = new CombatSystem(entityManager, scene, camera as THREE.PerspectiveCamera, inputSystem);
     const scoringSystem = new ScoringSystem();
+    const recorderSystem = new RecorderSystem(entityManager, inputSystem);
 
     // Peer wiring
     movementSystem.setPhysicsSystem(physicsSystem);
@@ -65,6 +73,7 @@ export function GameOrchestrator() {
     // 6) Camera
     // 7) Render
     entityManager.registerSystem(inputSystem);
+    entityManager.registerSystem(recorderSystem);
     entityManager.registerSystem(movementSystem);
     entityManager.registerSystem(physicsSystem);
     entityManager.registerSystem(combatSystem);
@@ -239,6 +248,8 @@ export function GameOrchestrator() {
     return {
       entityManager,
       physicsSystem,
+      recorderSystem,
+      inputSystem,
       rapierReadyRef: { get ready() { return rapierReady; } },
     };
   }, []); // construct once
@@ -278,9 +289,11 @@ export function GameOrchestrator() {
     }
 
     // Step fixed-update systems; CameraSystem receives the same R3F camera reference
-    while (accumulatorRef.current >= FIXED_DT) {
-      boot.entityManager.updateSystems(FIXED_DT);
-      accumulatorRef.current -= FIXED_DT;
+    if (!boot.inputSystem.getInputState().isPaused) {
+      while (accumulatorRef.current >= FIXED_DT) {
+        boot.entityManager.updateSystems(FIXED_DT);
+        accumulatorRef.current -= FIXED_DT;
+      }
     }
 
     // Compute interpolation alpha for potential view-only smoothing (currently unused)
@@ -294,8 +307,10 @@ export function GameOrchestrator() {
 // Provide EntityManager to React subtree for view-only bindings.
 // We don't add Three objects here because RenderSystem manages scene content.
 return (
-  <EntityManagerContext.Provider value={boot.entityManager}>
-    <></>
-  </EntityManagerContext.Provider>
+  <GameOrchestratorContext.Provider value={boot}>
+    <EntityManagerContext.Provider value={boot.entityManager}>
+      <></>
+    </EntityManagerContext.Provider>
+  </GameOrchestratorContext.Provider>
 );
 }

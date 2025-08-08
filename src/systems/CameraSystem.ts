@@ -168,8 +168,7 @@ export class CameraSystem extends System {
         this._tmpC,
         distance,
         true,
-        // Explicitly include CollisionLayers reference to meet policy
-        (CAMERA_OCCLUSION_MASK | CollisionLayers.CAMERA_BLOCKER)
+        CAMERA_OCCLUSION_MASK
       );
 
       if (hit) {

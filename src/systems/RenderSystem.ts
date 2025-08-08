@@ -55,7 +55,7 @@ export class RenderSystem extends System {
         this.scene.traverse((o) => {
             const anyO = o as unknown as { isLight?: boolean };
             if (anyO.isLight) {
-              toRemove.push(o);
+            toRemove.push(o);
             }
         });
         toRemove.forEach(o => this.scene.remove(o));
@@ -108,7 +108,7 @@ export class RenderSystem extends System {
         const toRemove: THREE.Object3D[] = [];
         this.scene.traverse((o) => {
             if ((o as any).userData?.type === 'wall') {
-                toRemove.push(o);
+            toRemove.push(o);
             }
         });
         toRemove.forEach((o) => this.scene.remove(o));
@@ -122,7 +122,7 @@ export class RenderSystem extends System {
             const scale = this.entityManager.getComponent<ScaleComponent>(entityId, 'ScaleComponent');
 
             if (!position || !meshComp) {
-              continue;
+            continue;
             }
 
             let obj = this.entityObject.get(entityId);
@@ -136,7 +136,7 @@ export class RenderSystem extends System {
             }
 
             if (!obj) {
-              continue;
+            continue;
             }
 
             // Update position
@@ -179,15 +179,13 @@ export class RenderSystem extends System {
             group.name = 'Player_Soldier_Pending';
             // Kick async load; placeholder invisible to avoid purple capsule look
             group.visible = meshComp.visible !== false; // follow component flag
-
             this.gltfLoader.load(
                 'assets/models/characters/soldier.glb',
                 (gltf) => {
                     const root = gltf.scene || gltf.scenes?.[0];
                     if (!root) {
-                      return;
+                    return;
                     }
-
                     // Shadows
                     root.traverse((o) => {
                         const m = o as THREE.Mesh;
@@ -196,7 +194,6 @@ export class RenderSystem extends System {
                             m.receiveShadow = true;
                         }
                     });
-
                     // Replace placeholder content and normalize transform
                     group.name = 'Player_Soldier';
                     while (group.children.length) {
@@ -206,23 +203,20 @@ export class RenderSystem extends System {
                     root.rotation.set(0, 0, 0);
                     root.scale.set(1, 1, 1);
                     group.add(root);
-
                     // Setup animation mixer and play idle if found
                     const mixer = new THREE.AnimationMixer(root);
                     this.entityMixer.set(entityId, mixer);
-
                     const idle = gltf.animations.find(a => a.name === 'Soldier_Idle') || gltf.animations[0];
                     if (idle) {
                         mixer.clipAction(idle).reset().play();
                     }
-
                     // Load M4 and attach to common socket names
                     this.gltfLoader.load(
                         'assets/models/weapons/m4a1.glb',
                         (wgltf) => {
                             const weapon = wgltf.scene || wgltf.scenes?.[0];
                             if (!weapon) {
-                              return;
+                            return;
                             }
                             weapon.traverse((o) => {
                                 const m = o as THREE.Mesh;
@@ -306,7 +300,7 @@ export class RenderSystem extends System {
         let found: THREE.Object3D | null = null;
         root.traverse((obj) => {
             if (found) {
-              return;
+            return;
             }
             if (obj.name && names.includes(obj.name)) {
                 found = obj;

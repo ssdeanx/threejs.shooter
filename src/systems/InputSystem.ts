@@ -2,6 +2,8 @@ import { System } from '../core/System.js';
 import type { EntityId } from '../core/types.js';
 
 export interface InputState {
+  isPaused: boolean;
+
   // Movement keys
   w: boolean;
   a: boolean;
@@ -84,6 +86,7 @@ export class InputSystem extends System {
 
   private createInitialInputState(): InputState {
     return {
+      isPaused: false,
       w: false,
       a: false,
       s: false,
@@ -237,6 +240,7 @@ private addListener<K extends keyof globalThis.DocumentEventMap>(
         break;
       case 'Escape':
         this.inputState.escape = true;
+        this.inputState.isPaused = !this.inputState.isPaused;
         break;
       case 'Tab':
         this.inputState.tab = true;
@@ -287,6 +291,7 @@ private addListener<K extends keyof globalThis.DocumentEventMap>(
 
   private clearInputState(): void {
     // Clear all input states when focus is lost
+    this.inputState.isPaused = false;
     this.inputState.w = false;
     this.inputState.a = false;
     this.inputState.s = false;
@@ -333,6 +338,10 @@ private addListener<K extends keyof globalThis.DocumentEventMap>(
   // Public methods to access input state
   getInputState(): Readonly<InputState> {
     return this.inputState;
+  }
+
+  setInputState(newState: InputState): void {
+    this.inputState = { ...newState };
   }
 
   getAttachedElement(): globalThis.HTMLElement | null {

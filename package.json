@@ -18,20 +18,21 @@
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
-    "@dimforge/rapier3d": "^0.18.0",
-    "@dimforge/rapier3d-compat": "^0.18.0",
-    "@eslint-react/ast": "^1.52.3",
     "@react-three/drei": "^10.6.1",
     "@react-three/fiber": "^9.3.0",
     "@react-three/postprocessing": "^3.0.4",
+    "@react-three/rapier": "^2.1.0",
+    "postprocessing": "^6.37.7",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "react-tracked": "^2.0.1",
+    "winston": "^3.17.0",
     "zustand": "^5.0.7",
     "zustand-computed": "^2.1.0",
     "zustand-x": "^6.1.1"
   },
   "devDependencies": {
+    "@eslint-react/ast": "^1.52.3",
     "@eslint-react/core": "^1.52.3",
     "@eslint-react/shared": "^1.52.3",
     "@types/estree": "^1.0.8",
@@ -46,11 +47,11 @@
     "@webxr-input-profiles/motion-controllers": "^1.0.0",
     "eslint": "^9.32.0",
     "eslint-plugin-import": "^2.32.0",
-    "eslint-plugin-jsdoc": "^52.0.2",
+    "eslint-plugin-jsdoc": "^52.0.4",
     "eslint-plugin-jsonc": "^2.20.1",
     "three": "^0.179.1",
     "typescript": "^5.9.2",
-    "vite": "^7.0.6"
+    "vite": "^7.1.0"
   },
   "keywords": [
     "threejs",

@@ -131,7 +131,9 @@ export class SoldierSystem extends System {
   }
 
   play(name: string): void {
-    if (!this.mixerHandle) return;
+    if (!this.mixerHandle) {
+      return;
+    }
     const action = this.mixerHandle.actions[name];
     if (!action) {
       console.warn(`SoldierSystem: animation "${name}" not found`);
@@ -160,7 +162,9 @@ export class SoldierSystem extends System {
   private findObjectByNames(root: THREE.Object3D, names: string[]): THREE.Object3D | null {
     let found: THREE.Object3D | null = null;
     root.traverse((obj) => {
-      if (found) return;
+      if (found) {
+        return;
+      }
       if (obj.name && names.includes(obj.name)) {
         found = obj;
       }

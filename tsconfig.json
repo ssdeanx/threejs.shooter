@@ -20,8 +20,7 @@
     "paths": {
       "@/*": ["src/*"]
     },
-    // Let Vite inject its own client types implicitly; avoid hard pinning here.
-    // If editor still complains, we can add "vite/client" back.
+    "typeRoots": ["node_modules/@types"],
     "types": []
   },
   "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts"]

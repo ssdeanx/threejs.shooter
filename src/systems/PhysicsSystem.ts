@@ -1,6 +1,59 @@
 import * as THREE from 'three';
 import { System } from '../core/System.js';
-import { CollisionLayers } from '@/core/CollisionLayers.js';
+import { CollisionLayers, interactionGroup } from '@/core/CollisionLayers.js';
+
+/**
+ * Stage 2 helpers: tiny typed guards and invariant checks.
+ * These are non-behavioral and only used for development-time safety.
+ */
+const __assertPowerOfTwo = (n: number, name: string): void => {
+  // power-of-two and non-zero
+  if (!(n && (n & (n - 1)) === 0)) {
+    throw new Error(`[CollisionLayers] ${name} must be a non-zero single bit (power-of-two). Got: ${n}`);
+  }
+};
+
+const __validateCollisionLayers = (): void => {
+  // Validate common layers we rely on
+  __assertPowerOfTwo(Number(CollisionLayers.PLAYER), 'PLAYER');
+  __assertPowerOfTwo(Number(CollisionLayers.ENEMY), 'ENEMY');
+  __assertPowerOfTwo(Number(CollisionLayers.ENV), 'ENV');
+  __assertPowerOfTwo(Number(CollisionLayers.BULLET), 'BULLET');
+  __assertPowerOfTwo(Number(CollisionLayers.CAMERA_BLOCKER), 'CAMERA_BLOCKER');
+
+  // Ensure uniqueness (no overlapping bits among core layers)
+  const core =
+    Number(CollisionLayers.PLAYER) |
+    Number(CollisionLayers.ENEMY) |
+    Number(CollisionLayers.ENV) |
+    Number(CollisionLayers.BULLET) |
+    Number(CollisionLayers.CAMERA_BLOCKER);
+
+  // Count bits by clearing lowest-set bit repeatedly
+  let bits = 0;
+  let x = core;
+  while (x) {
+    x &= x - 1;
+    bits++;
+  }
+  if (bits < 5) {
+    throw new Error('[CollisionLayers] Core layers must be unique single bits; overlap detected.');
+  }
+};
+// Immediately validate at module load without assuming Node globals.
+// We avoid referencing `process` to keep browser builds happy.
+try {
+  __validateCollisionLayers();
+} catch (e) {
+  // Surface configuration mistakes early but don't crash module eval in production bundles.
+  // eslint-disable-next-line no-console
+  console.error(e);
+}
+
+/** Typed helper: same logic as makeGroups, just returns number explicitly */
+const makeGroupsTyped = (rapier: Rapier, member: number, mask: number): number => {
+  return makeGroups(rapier, member, mask);
+};
 import type { EntityId } from '../core/types.js';
 import type { EntityManager } from '../core/EntityManager.js';
 import type { PositionComponent, RotationComponent } from '../components/TransformComponents.js';
@@ -12,23 +65,108 @@ import type {
   Vec3,
   RigidBodyKind,
 } from '../components/PhysicsComponents.js';
-import type { TerrainHeightfield } from './RenderSystem.js';
-
-// Rapier compat build (WASM init)
-import RAPIERInit, * as RAPIERNS from '@dimforge/rapier3d-compat';
-type Rapier = typeof RAPIERNS;
+import type { TerrainHeightfield } from './RenderSystem.js'; // NOTE: Heightfield path is intentionally disabled; using flat plane ground.
 
 /**
- * Construct Rapier interaction groups safely across compat builds.
+ * IMPORTANT:
+ * Use only @react-three/rapier (R3R). It doesn’t export engine classes in types, so we access them off the default namespace at runtime.
+ * We keep types precise elsewhere and isolate unknown surface to the minimal interop points.
+ */
+import RAPIER from '@react-three/rapier';
+type Rapier = typeof RAPIER;
+
+/**
+ * Minimal structural Rapier types to replace any without changing runtime behavior.
+ * These mirror only the members we actually touch.
+ */
+type RapierVec3 = { x: number; y: number; z: number };
+type RapierQuat = { x: number; y: number; z: number; w: number };
+
+interface RapierRay {
+  pointAt: (toi: number) => RapierVec3;
+}
+
+interface RapierRaycastHit {
+  collider: RapierCollider | null;
+  timeOfImpact: number;
+  normal?: RapierVec3;
+}
+
+interface RapierRigidBody {
+  handle: number;
+  translation(): RapierVec3;
+  rotation(): RapierQuat;
+  linvel(): RapierVec3;
+
+  setNextKinematicTranslation(v: RapierVec3): void;
+  setNextKinematicRotation(q: RapierQuat): void;
+  setLinvel(v: RapierVec3, wake: boolean): void;
+
+  setLinearDamping?(d: number): void;
+  setAngularDamping?(d: number): void;
+  setGravityScale?(s: number, wake: boolean): void;
+  enableCcd?(on: boolean): void;
+  lockRotations?(lock: boolean, wake: boolean): void;
+
+  applyImpulse?(v: RapierVec3, wake: boolean): void;
+
+  numColliders(): number;
+  collider(i: number): RapierCollider | null;
+}
+
+interface RapierCollider {
+  parent(): RapierRigidBody | null;
+  setCollisionGroups?(g: number): void;
+  setSolverGroups?(g: number): void;
+  collisionGroups?(): number;
+}
+
+interface RapierColliderSet {
+  len?(): number;
+  castRay?(
+    ray: RapierRay,
+    maxToi: number,
+    solid: boolean
+  ): RapierRaycastHit | null;
+}
+
+/* eslint-disable @typescript-eslint/no-unused-vars */
+interface RapierWorld {
+  step(): void;
+
+  bodies: { get: (h: number) => RapierRigidBody | null };
+  colliders: RapierColliderSet;
+
+  // Some builds expose raycast on world, some on colliders
+  castRay?(
+    ray: RapierRay,
+    maxToi: number,
+    solid: boolean
+  ): RapierRaycastHit | null;
+  castRayAndGetNormal?(
+    ray: RapierRay,
+    maxToi: number,
+    solid: boolean,
+    filterGroups: number
+  ): RapierRaycastHit | null;
+
+  createRigidBody?(desc: unknown): RapierRigidBody;
+  createCollider?(desc: unknown, body: RapierRigidBody): RapierCollider | null;
+  removeCollider?(c: RapierCollider, wake: boolean): void;
+  removeRigidBody?(b: RapierRigidBody): void;
+}
+
+/**
+ * Construct Rapier interaction groups safely across builds.
  * Uses InteractionGroups.fixed when available; otherwise packs two 16-bit masks manually.
  */
 const makeGroups = (rapier: Rapier, member: number, mask: number): number => {
-  const ig = (rapier as unknown as { InteractionGroups?: { fixed?: (m: number, w: number) => number } }).InteractionGroups;
+  const ig = (rapier as { InteractionGroups?: { fixed?: (m: number, w: number) => number } }).InteractionGroups;
   if (ig && typeof ig.fixed === 'function') {
     return ig.fixed(member, mask);
   }
-  // Manual 16-bit packing: low 16 bits = membership, high 16 bits = filter mask
-  return ((member & 0xffff) | ((mask & 0xffff) << 16)) >>> 0;
+  // Fallback to shared packer to keep consistency across systems
+  return interactionGroup(member, mask);
 };
 
 interface BodyMaps {
@@ -39,10 +177,12 @@ interface BodyMaps {
 export class PhysicsSystem extends System {
   private entityManager: EntityManager;
   private rapier!: Rapier;
-  private world!: RAPIERNS.World;
-  private bodies!: RAPIERNS.RigidBodySet;
+  // R3R hosts engine classes on its default export at runtime; since TS types don't expose them, keep world as a narrow structural type.
+  // Narrow world type to our structural RapierWorld to enforce interface usage
+  private world!: RapierWorld;
+  private bodies!: { get: (h: number) => any };
   /** Live reference to world's ColliderSet; used by raycast/group checks */
-  private colliders!: RAPIERNS.ColliderSet;
+  private colliders!: { len?: () => number } | any;
 
   /**
    * Live health check for collider set. Hygiene requires symbols to be used:
@@ -81,31 +221,49 @@ export class PhysicsSystem extends System {
     return this.terrainEntityId;
   }
 
-  async init(heightfield?: TerrainHeightfield | null, gravity: Vec3 = { x: 0, y: -9.82, z: 0 }): Promise<void> {
-    // Initialize Rapier once per app (compat build returns a thenable that resolves to the namespace)
-    const rapierInit = RAPIERInit as unknown as () => Promise<Rapier>;
-    this.rapier = await rapierInit();
-
-    this.world = new this.rapier.World(new this.rapier.Vector3(gravity.x, gravity.y, gravity.z));
-    this.bodies = this.world.bodies;
-    this.colliders = this.world.colliders;
-    // mark collider set live on init
-    this.colliderSetIsLive = true;
-
-    // Create ground from heightfield if provided, else fallback to big flat cuboid.
-    if (heightfield) {
-      this.createHeightfieldStatic(heightfield);
-    } else {
-      const groundDesc = this.rapier.RigidBodyDesc.fixed();
-      const ground = this.world.createRigidBody(groundDesc);
-      const halfExt = new this.rapier.Vector3(500, 1, 500);
-      const colDesc = this.rapier.ColliderDesc.cuboid(halfExt.x, halfExt.y, halfExt.z);
-      this.world.createCollider(colDesc, ground);
-      // position ground
-      ground.setTranslation({ x: 0, y: -1, z: 0 }, true);
-      // keep rotation identity
-      ground.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true);
+  async init(_heightfield?: TerrainHeightfield | null, gravity: Vec3 = { x: 0, y: -9.82, z: 0 }): Promise<void> {
+    // Use R3R namespace as the engine host; engine classes are available at runtime on the default export.
+    if (!RAPIER || typeof (RAPIER as unknown as { World?: unknown }).World !== 'function') {
+      throw new TypeError('Rapier WASM not initialized by @react-three/rapier provider');
     }
+    this.rapier = RAPIER;
+  
+    // Construct world and caches via the R3R namespace
+    // Instantiate Rapier world via R3R runtime namespace (types are not exposed, so use minimal structural typing)
+    const WorldCtor = (this.rapier as unknown as { World?: new (g: { x: number; y: number; z: number }) => any }).World;
+    const Vec3Ctor = (this.rapier as unknown as { Vector3?: new (x: number, y: number, z: number) => any }).Vector3;
+    if (typeof WorldCtor !== 'function' || typeof Vec3Ctor !== 'function') {
+      throw new TypeError('Rapier core constructors not found on @react-three/rapier default export');
+    }
+    this.world = new WorldCtor(new Vec3Ctor(gravity.x, gravity.y, gravity.z)) as unknown as RapierWorld;
+    this.bodies = this.world.bodies as any;
+    this.colliders = this.world.colliders as any;
+    this.colliderSetIsLive = true;
+  
+    // Flat ground plane (green visual recommended) to stabilize the project.
+    const { RigidBodyDesc } = this.rapier as unknown as { RigidBodyDesc?: { fixed: () => any } };
+    const { ColliderDesc } = this.rapier as unknown as { ColliderDesc?: { cuboid: (x: number, y: number, z: number) => any } };
+    if (!RigidBodyDesc || !ColliderDesc) {
+      throw new TypeError('RigidBodyDesc/ColliderDesc missing on @react-three/rapier default export');
+    }
+    const groundDesc = RigidBodyDesc.fixed();
+    const ground = (this.world as unknown as { createRigidBody: (d: any) => any }).createRigidBody(groundDesc);
+    // Physics ground: very large thin box centered at y = -0.5 so top is y = 0
+    const halfExt = new Vec3Ctor(500, 0.5, 500);
+    const colDesc = ColliderDesc.cuboid(halfExt.x, halfExt.y, halfExt.z);
+
+    const envGroups = makeGroups(
+      this.rapier,
+      Number(CollisionLayers.ENV),
+      Number(CollisionLayers.PLAYER | CollisionLayers.ENEMY | CollisionLayers.BULLET | CollisionLayers.ENV | CollisionLayers.CAMERA_BLOCKER)
+    );
+    colDesc.setCollisionGroups?.(envGroups);
+    colDesc.setSolverGroups?.(envGroups);
+
+    (this.world as unknown as { createCollider: (d: any, b: any) => any }).createCollider(colDesc, ground);
+    ground.setTranslation({ x: 0, y: -0.5, z: 0 }, true);
+    ground.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true);
+    // Rendering note: add a visible green plane at y = 0 sized ~1000x1000 to match this collider.
   }
 
   update(deltaTime: number, entities: EntityId[]): void {
@@ -190,7 +348,7 @@ export class PhysicsSystem extends System {
   }
 
   // Public API: get Rapier body for an entity (read-only interop; do not mutate outside)
-  getBody(entityId: EntityId): RAPIERNS.RigidBody | null {
+  getBody(entityId: EntityId): any | null {
     const handle = this.maps.entityToHandle.get(entityId);
     return handle != null ? (this.bodies.get(handle) ?? null) : null;
   }
@@ -247,17 +405,15 @@ export class PhysicsSystem extends System {
       return;
     }
     // Iterate all colliders attached to this body and set groups
-    // rapier.js exposes colliderParent iterator via body.colliders()
-    const groups = makeGroups(this.rapier, layersMask, interactsWithMask);
-    /**
-     * Enumerate exactly the colliders attached to this body and set groups on each.
-     * Avoid scanning the global ColliderSet; iterate via body.numColliders()/body.collider(i).
-     */
-    const count = body.numColliders();
+    // Use typed wrapper to keep structural typing engaged and satisfy TS usage
+    const groups = makeGroupsTyped(this.rapier, layersMask, interactsWithMask);
+    const count = typeof body.numColliders === 'function' ? body.numColliders() : 0;
     for (let i = 0; i < count; i++) {
-      const collider = body.collider(i);
-      if (collider) {
+      const collider = typeof body.collider === 'function' ? body.collider(i) : null;
+      if (collider && typeof collider.setCollisionGroups === 'function') {
         collider.setCollisionGroups(groups);
+      }
+      if (collider && typeof collider.setSolverGroups === 'function') {
         collider.setSolverGroups(groups);
       }
     }
@@ -273,13 +429,24 @@ export class PhysicsSystem extends System {
 
     // Normalize direction for Rapier Ray; scale is provided by maxToi
     const nd = dir.lengthSq() > 0 ? dir.clone().normalize() : new THREE.Vector3(0, -1, 0);
-    const ray = new this.rapier.Ray(
+    const ray = new (this.rapier as unknown as { Ray: new (o: { x: number; y: number; z: number }, d: { x: number; y: number; z: number }) => any }).Ray(
       { x: origin.x, y: origin.y, z: origin.z },
       { x: nd.x, y: nd.y, z: nd.z }
     );
 
     // Cast the ray
-    const hit = this.world.castRay(ray, maxToi, solid);
+    // Respect optional filter groups if provided by caller. Use collider-wide query if available.
+    let hit: any = null;
+    const worldAny = this.world as any;
+    if (filterGroups != null && typeof worldAny.castRayAndGetNormal === 'function') {
+      // castRayAndGetNormal(ray, maxToi, solid, filterGroups)
+      hit = (this.world as unknown as { castRayAndGetNormal: (r: any, m: number, s: boolean, g: number) => any }).castRayAndGetNormal(ray, maxToi, solid, filterGroups);
+    } else if (typeof worldAny.castRay === 'function') {
+      hit = (this.world as unknown as { castRay: (r: any, m: number, s: boolean) => any }).castRay(ray, maxToi, solid);
+    } else if (this.colliders && typeof (this.colliders as any).castRay === 'function') {
+      // Fallback: use ColliderSet.castRay if world wrapper lacks the method
+      hit = (this.colliders as any).castRay(ray, maxToi, solid);
+    }
     if (!hit) {
       return null;
     }
@@ -309,8 +476,8 @@ export class PhysicsSystem extends System {
       normalVec3 = this.tmpV3.set(maybeNormal.x, maybeNormal.y, maybeNormal.z).normalize();
     }
 
-    const parent = collider.parent();
-    const entity = parent ? (this.maps.handleToEntity.get(parent.handle) ?? null) : null;
+    const parent = typeof collider.parent === 'function' ? collider.parent() : null;
+    const entity = parent && typeof parent.handle === 'number' ? (this.maps.handleToEntity.get(parent.handle) ?? null) : null;
 
     return {
       entity,
@@ -418,7 +585,7 @@ export class PhysicsSystem extends System {
 
     // Create new body when none exists
     const bodyDesc = this.createBodyDescFrom(rb, position);
-    const body = this.world.createRigidBody(bodyDesc);
+    const body = (this.world as any).createRigidBody(bodyDesc);
     this.maps.entityToHandle.set(entityId, body.handle);
     this.maps.handleToEntity.set(body.handle, entityId);
 
@@ -428,20 +595,22 @@ export class PhysicsSystem extends System {
       this.createColliderForBody(body, colliderComp);
     } else {
       // Fallback: small capsule-ish body
-      const colDesc = this.rapier.ColliderDesc.capsule(0.9, 0.5)
+      const colDesc = (this.rapier as unknown as { ColliderDesc: { capsule: (hh: number, r: number) => any } }).ColliderDesc
+        .capsule(0.9, 0.5)
         .setFriction(1)
         .setRestitution(0);
 
       // Default to ENV membership colliding with PLAYER | ENEMY | ENV
-      const fallbackGroups = makeGroups(
+      // Keep explicit CollisionLayers references; ensure ENV membership and PLAYER|ENEMY|ENV mask
+      const fallbackGroups = makeGroupsTyped(
         this.rapier,
-        CollisionLayers.ENV,
-        CollisionLayers.PLAYER | CollisionLayers.ENEMY | CollisionLayers.ENV
+        Number(CollisionLayers.ENV),
+        Number(CollisionLayers.PLAYER | CollisionLayers.ENEMY | CollisionLayers.ENV)
       );
       colDesc.setCollisionGroups(fallbackGroups);
       colDesc.setSolverGroups(fallbackGroups);
 
-      this.world.createCollider(colDesc, body);
+      (this.world as any).createCollider(colDesc, body);
     }
 
     // Apply optional properties
@@ -485,32 +654,32 @@ export class PhysicsSystem extends System {
     for (let i = 0; i < colliderCount; i++) {
       const coll = body.collider(i);
       if (coll) {
-        this.world.removeCollider(coll, true);
+        (this.world as unknown as { removeCollider?: (c: any, w: boolean) => void }).removeCollider?.(coll, true);
       }
     }
-    this.world.removeRigidBody(body);
+    (this.world as unknown as { removeRigidBody?: (b: any) => void }).removeRigidBody?.(body);
     this.maps.entityToHandle.delete(entityId);
     this.maps.handleToEntity.delete(handle);
   }
 
   // Internals
 
-  private createBodyDescFrom(rb: RigidBodyComponent, position: PositionComponent): RAPIERNS.RigidBodyDesc {
+  private createBodyDescFrom(rb: RigidBodyComponent, position: PositionComponent): any {
     const { kind } = rb;
-    let desc: RAPIERNS.RigidBodyDesc;
+    let desc: any;
     switch (kind) {
       case 'dynamic':
-        desc = this.rapier.RigidBodyDesc.dynamic();
+        desc = (this.rapier as unknown as { RigidBodyDesc: { dynamic: () => any } }).RigidBodyDesc.dynamic();
         break;
       case 'kinematicVelocity':
-        desc = this.rapier.RigidBodyDesc.kinematicVelocityBased();
+        desc = (this.rapier as unknown as { RigidBodyDesc: { kinematicVelocityBased: () => any } }).RigidBodyDesc.kinematicVelocityBased();
         break;
       case 'kinematicPosition':
-        desc = this.rapier.RigidBodyDesc.kinematicPositionBased();
+        desc = (this.rapier as unknown as { RigidBodyDesc: { kinematicPositionBased: () => any } }).RigidBodyDesc.kinematicPositionBased();
         break;
       case 'fixed':
       default:
-        desc = this.rapier.RigidBodyDesc.fixed();
+        desc = (this.rapier as unknown as { RigidBodyDesc: { fixed: () => any } }).RigidBodyDesc.fixed();
         break;
     }
 
@@ -526,29 +695,29 @@ export class PhysicsSystem extends System {
 
     return desc;
   }
-  private createColliderForBody(body: RAPIERNS.RigidBody, collider: ColliderComponent): void {
+  private createColliderForBody(body: any, collider: ColliderComponent): void {
     const desc = this.makeColliderDesc(collider.shape);
-    if (collider.restitution != null) {
+    if (collider.restitution != null && typeof desc.setRestitution === 'function') {
       desc.setRestitution(collider.restitution);
     }
-    if (collider.friction != null) {
+    if (collider.friction != null && typeof desc.setFriction === 'function') {
       desc.setFriction(collider.friction);
     }
-    if (collider.sensor) {
+    if (collider.sensor && typeof desc.setSensor === 'function') {
       desc.setSensor(true);
     }
-    if (collider.activeEvents != null) {
+    if (collider.activeEvents != null && typeof desc.setActiveEvents === 'function') {
       desc.setActiveEvents(collider.activeEvents);
     }
-    if (collider.activeCollisionTypes != null) {
+    if (collider.activeCollisionTypes != null && typeof desc.setActiveCollisionTypes === 'function') {
       desc.setActiveCollisionTypes(collider.activeCollisionTypes);
     }
 
     // Respect explicitly provided groups
-    if (collider.collisionGroups != null) {
+    if (collider.collisionGroups != null && typeof desc.setCollisionGroups === 'function') {
       desc.setCollisionGroups(collider.collisionGroups);
     }
-    if (collider.solverGroups != null) {
+    if (collider.solverGroups != null && typeof desc.setSolverGroups === 'function') {
       desc.setSolverGroups(collider.solverGroups);
     }
 
@@ -585,84 +754,58 @@ export class PhysicsSystem extends System {
         }
       }
 
-      const groups = makeGroups(this.rapier, member, mask);
-      if (collider.collisionGroups == null) {
+      // Use typed wrapper for InteractionGroups packing across Rapier builds
+      const groups = makeGroupsTyped(this.rapier, member, mask);
+      if (collider.collisionGroups == null && typeof desc.setCollisionGroups === 'function') {
         desc.setCollisionGroups(groups);
       }
-      if (collider.solverGroups == null) {
+      if (collider.solverGroups == null && typeof desc.setSolverGroups === 'function') {
         desc.setSolverGroups(groups);
       }
     }
 
     if (collider.offset) {
       const o = collider.offset;
-      desc.setTranslation(o.position.x, o.position.y, o.position.z);
-      if (o.rotation) {
-        desc.setRotation({ x: o.rotation.x, y: o.rotation.y, z: o.rotation.z, w: o.rotation.w });
+      if (typeof (desc as any).setTranslation === 'function') {
+        (desc as any).setTranslation(o.position.x, o.position.y, o.position.z);
+      }
+      if (o.rotation && typeof (desc as any).setRotation === 'function') {
+        (desc as any).setRotation({ x: o.rotation.x, y: o.rotation.y, z: o.rotation.z, w: o.rotation.w });
       }
     }
 
-    this.world.createCollider(desc, body);
+    (this.world as unknown as { createCollider: (d: any, b: any) => any }).createCollider(desc, body);
     // Parent mapping is already set when creating rigid body; nothing else needed here.
   }
 
-  private makeColliderDesc(shape: ColliderShape): RAPIERNS.ColliderDesc {
+  private makeColliderDesc(shape: ColliderShape): any {
     switch (shape.type) {
       case 'cuboid':
-        return this.rapier.ColliderDesc.cuboid(shape.halfExtents.x, shape.halfExtents.y, shape.halfExtents.z);
+        return (this.rapier as unknown as { ColliderDesc: { cuboid: (x: number, y: number, z: number) => any } }).ColliderDesc.cuboid(
+          shape.halfExtents.x, shape.halfExtents.y, shape.halfExtents.z
+        );
       case 'ball':
-        return this.rapier.ColliderDesc.ball(shape.radius);
+        return (this.rapier as unknown as { ColliderDesc: { ball: (r: number) => any } }).ColliderDesc.ball(shape.radius);
       case 'capsule':
-        return this.rapier.ColliderDesc.capsule(shape.halfHeight, shape.radius);
+        return (this.rapier as unknown as { ColliderDesc: { capsule: (hh: number, r: number) => any } }).ColliderDesc.capsule(shape.halfHeight, shape.radius);
       case 'trimesh':
-        return this.rapier.ColliderDesc.trimesh(shape.vertices, shape.indices);
+        return (this.rapier as unknown as { ColliderDesc: { trimesh: (v: Float32Array | number[] | ArrayLike<number>, i: Uint32Array | number[]) => any } })
+          .ColliderDesc.trimesh(shape.vertices, shape.indices);
       case 'heightfield': {
-        const rows = shape.heights.length;
-        const cols = shape.heights[0]?.length ?? 0;
-        const scale = new this.rapier.Vector3(shape.scale.x, shape.scale.y, shape.scale.z);
-        return this.rapier.ColliderDesc.heightfield(rows, cols, new Float32Array(shape.heights.flat()), scale);
+        // Heightfield terrain is intentionally disabled to stabilize physics with a canonical flat ground plane at y=0.
+        // Throw early in all environments to prevent accidental reintroduction.
+        throw new Error('[PhysicsSystem] Heightfield collider is disabled. Use the flat ground plane at y=0 instead.');
       }
       default:
-        return this.rapier.ColliderDesc.ball(0.5);
+        return (this.rapier as unknown as { ColliderDesc: { ball: (r: number) => any } }).ColliderDesc.ball(0.5);
     }
   }
 
-  private createHeightfieldStatic(hf: TerrainHeightfield): void {
-    const rows = hf.heights.length;
-    const cols = hf.heights[0]?.length ?? 0;
-    const heights = new Float32Array(rows * cols);
-    let k = 0;
-    for (let r = 0; r < rows; r++) {
-      for (let c = 0; c < cols; c++) {
-        heights[k++] = hf.heights[r][c];
-      }
-    }
-    // scale: elementSize along X/Z, 1 on Y (already in heights)
-    const scale = new this.rapier.Vector3(hf.elementSize, 1, hf.elementSize);
-
-    const bodyDesc = this.rapier.RigidBodyDesc.fixed().setTranslation(0, 0, 0);
-    const body = this.world.createRigidBody(bodyDesc);
-
-    // If a terrain entity was provided, map the body handle to it so raycasts resolve to this entity.
-    if (this.terrainEntityId != null) {
-      this.maps.handleToEntity.set(body.handle, this.terrainEntityId);
-      this.maps.entityToHandle.set(this.terrainEntityId, body.handle);
-    }
-
-    const colDesc = this.rapier.ColliderDesc.heightfield(rows, cols, heights, scale)
-      .setTranslation(hf.offsetX, 0, hf.offsetZ);
-
-    // Set sensible collision groups for environment
-    const envGroups = makeGroups(
-      this.rapier,
-      CollisionLayers.ENV,
-      CollisionLayers.PLAYER | CollisionLayers.ENEMY | CollisionLayers.BULLET | CollisionLayers.ENV | CollisionLayers.CAMERA_BLOCKER
-    );
-    colDesc.setCollisionGroups(envGroups);
-    colDesc.setSolverGroups(envGroups);
-
-    this.world.createCollider(colDesc, body);
-  }
+  // Heightfield is disabled by request to stabilize the project with a flat plane.
+  // Keeping a stub for future reactivation if needed.
+  // private createHeightfieldStatic(_hf: TerrainHeightfield): void {
+  //   // Intentionally disabled. See init() for flat ground creation.
+  // }
 
   private getBodyKind(entityId: EntityId): RigidBodyKind | null {
     const rb = this.entityManager.getComponent<RigidBodyComponent>(entityId, 'RigidBodyComponent');

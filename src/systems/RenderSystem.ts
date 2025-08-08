@@ -53,8 +53,9 @@ export class RenderSystem extends System {
         // Remove existing lights if any to avoid duplicates causing bands
         const toRemove: THREE.Object3D[] = [];
         this.scene.traverse((o) => {
-            if ((o as any).isLight) {
-              toRemove.push(o);
+            const anyO = o as unknown as { isLight?: boolean };
+            if (anyO.isLight) {
+            toRemove.push(o);
             }
         });
         toRemove.forEach(o => this.scene.remove(o));
@@ -83,82 +84,34 @@ export class RenderSystem extends System {
         this.scene.add(fill);
     }
 
-    // Create a large displaced ground mesh for visuals and store heightfield locally for PhysicsSystem via getHeightfield()
+    // Stable flat green plane for visuals; heightfield intentionally disabled
     private createVisualGround(): void {
         const size = 1000;
-        const segments = 128; // friendlier for heightfield grid (rows = cols = segments+1)
-        const geo = new THREE.PlaneGeometry(size, size, segments, segments);
-        const pos = geo.attributes.position as THREE.BufferAttribute;
-        const v = new THREE.Vector3();
-        function hash(n: number) { return Math.sin(n) * 43758.5453123; }
-        function noise2(x: number, y: number) {
-            const i = Math.floor(x), j = Math.floor(y);
-            const fX = x - i, fY = y - j;
-            const a = hash(i * 127.1 + j * 311.7);
-            const b = hash((i + 1) * 127.1 + j * 311.7);
-            const c = hash(i * 127.1 + (j + 1) * 311.7);
-            const d = hash((i + 1) * 127.1 + (j + 1) * 311.7);
-            const uX = fX * fX * (3 - 2 * fX);
-            const uY = fY * fY * (3 - 2 * fY);
-            return THREE.MathUtils.lerp(
-                THREE.MathUtils.lerp(a, b, uX),
-                THREE.MathUtils.lerp(c, d, uX),
-                uY
-            );
-        }
-        const amp = 8;
-
-        // Build height grid (rows x cols)
-        const cols = segments + 1;
-        const rows = segments + 1;
-        const heights: number[][] = Array.from({ length: rows }, () => Array(cols).fill(0));
-
-        for (let iy = 0; iy < rows; iy++) {
-            for (let ix = 0; ix < cols; ix++) {
-                const i = iy * cols + ix;
-                v.fromBufferAttribute(pos, i);
-                const nx = (v.x / 220) + 1000;
-                const nz = (v.y / 220) + 1000; // plane local second axis before rotation
-                const h =
-                    noise2(nx, nz) * amp * 0.5 +
-                    noise2(nx * 0.5, nz * 0.5) * amp * 0.3 +
-                    noise2(nx * 0.25, nz * 0.25) * amp * 0.2;
-                v.z = h;
-                heights[iy][ix] = h;
-                pos.setXYZ(i, v.x, v.y, v.z);
-            }
-        }
-        pos.needsUpdate = true;
-        geo.computeVertexNormals();
-
+        const geo = new THREE.PlaneGeometry(size, size, 1, 1);
         const mat = new THREE.MeshStandardMaterial({
-            color: 0x556b2f,
+            color: 0x2e7d32, // darker green for contrast
             roughness: 0.95,
             metalness: 0.0,
         });
         const mesh = new THREE.Mesh(geo, mat);
         mesh.rotation.x = -Math.PI / 2;
+        mesh.position.set(0, 0, 0);
         mesh.receiveShadow = true;
         mesh.frustumCulled = false;
 
-        // Store typed heightfield in-system for PhysicsSystem to retrieve explicitly
-        this.heightfieldData = {
-            heights,
-            elementSize: size / segments,
-            offsetX: -size / 2,
-            offsetZ: -size / 2,
-        };
+        // Explicitly keep heightfield disabled
+        this.heightfieldData = null;
 
         this.scene.add(mesh);
 
         // Ensure no accidental surrounding walls: remove any tall planes/boxes tagged as 'wall'
         const toRemove: THREE.Object3D[] = [];
         this.scene.traverse((o) => {
-          if ((o as any).userData?.type === 'wall') {
+            if ((o as any).userData?.type === 'wall') {
             toRemove.push(o);
-          }
+            }
         });
-        toRemove.forEach(o => this.scene.remove(o));
+        toRemove.forEach((o) => this.scene.remove(o));
     }
 
     update(deltaTime: number, entities: EntityId[]): void {
@@ -169,7 +122,7 @@ export class RenderSystem extends System {
             const scale = this.entityManager.getComponent<ScaleComponent>(entityId, 'ScaleComponent');
 
             if (!position || !meshComp) {
-              continue;
+            continue;
             }
 
             let obj = this.entityObject.get(entityId);
@@ -183,7 +136,7 @@ export class RenderSystem extends System {
             }
 
             if (!obj) {
-              continue;
+            continue;
             }
 
             // Update position
@@ -226,23 +179,21 @@ export class RenderSystem extends System {
             group.name = 'Player_Soldier_Pending';
             // Kick async load; placeholder invisible to avoid purple capsule look
             group.visible = meshComp.visible !== false; // follow component flag
-
             this.gltfLoader.load(
                 'assets/models/characters/soldier.glb',
                 (gltf) => {
                     const root = gltf.scene || gltf.scenes?.[0];
                     if (!root) {
-                      return;
+                    return;
                     }
-
                     // Shadows
-                    root.traverse((o: any) => {
-                        if (o.isMesh) {
-                            o.castShadow = true;
-                            o.receiveShadow = true;
+                    root.traverse((o) => {
+                        const m = o as THREE.Mesh;
+                        if ((m as unknown as { isMesh?: boolean }).isMesh) {
+                            m.castShadow = true;
+                            m.receiveShadow = true;
                         }
                     });
-
                     // Replace placeholder content and normalize transform
                     group.name = 'Player_Soldier';
                     while (group.children.length) {
@@ -252,28 +203,26 @@ export class RenderSystem extends System {
                     root.rotation.set(0, 0, 0);
                     root.scale.set(1, 1, 1);
                     group.add(root);
-
                     // Setup animation mixer and play idle if found
                     const mixer = new THREE.AnimationMixer(root);
                     this.entityMixer.set(entityId, mixer);
-
                     const idle = gltf.animations.find(a => a.name === 'Soldier_Idle') || gltf.animations[0];
                     if (idle) {
                         mixer.clipAction(idle).reset().play();
                     }
-
                     // Load M4 and attach to common socket names
                     this.gltfLoader.load(
                         'assets/models/weapons/m4a1.glb',
                         (wgltf) => {
                             const weapon = wgltf.scene || wgltf.scenes?.[0];
                             if (!weapon) {
-                              return;
+                            return;
                             }
-                            weapon.traverse((o: any) => {
-                                if (o.isMesh) {
-                                    o.castShadow = true;
-                                    o.receiveShadow = true;
+                            weapon.traverse((o) => {
+                                const m = o as THREE.Mesh;
+                                if ((m as unknown as { isMesh?: boolean }).isMesh) {
+                                    m.castShadow = true;
+                                    m.receiveShadow = true;
                                 }
                             });
                             const socket = this.findObjectByNames(root, ['RightHandSocket','RHandSocket','WeaponSocket','hand.R.socket']);
@@ -351,7 +300,7 @@ export class RenderSystem extends System {
         let found: THREE.Object3D | null = null;
         root.traverse((obj) => {
             if (found) {
-              return;
+            return;
             }
             if (obj.name && names.includes(obj.name)) {
                 found = obj;
@@ -368,13 +317,15 @@ export class RenderSystem extends System {
         if (obj) {
             this.scene.remove(obj);
             // best-effort dispose of geometries/materials
-            obj.traverse((o: any) => {
-                if (o.isMesh) {
-                    o.geometry?.dispose?.();
-                    if (Array.isArray(o.material)) {
-                        o.material.forEach((m: any) => m?.dispose?.());
+            obj.traverse((o) => {
+                const m = o as THREE.Mesh;
+                if ((m as unknown as { isMesh?: boolean }).isMesh) {
+                    (m.geometry as THREE.BufferGeometry | undefined)?.dispose?.();
+                    const mat = m.material as THREE.Material | THREE.Material[] | undefined;
+                    if (Array.isArray(mat)) {
+                        mat.forEach((mm) => mm?.dispose?.());
                     } else {
-                        o.material?.dispose?.();
+                        mat?.dispose?.();
                     }
                 }
             });

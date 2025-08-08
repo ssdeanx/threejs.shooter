@@ -11,3 +11,24 @@ export const CollisionLayers = {
 } as const;
 
 export type CollisionLayerKey = keyof typeof CollisionLayers;
+
+/**
+ * Packed interaction groups helper
+ * Returns a 32-bit number where low 16 bits are membership and high 16 bits are filter mask.
+ * Compatible with Rapier InteractionGroups.fixed(membership, filter) representation.
+ */
+export const interactionGroup = (membershipMask: number, filterMask: number): number => {
+  const member = membershipMask & 0xffff;
+  const mask = (filterMask & 0xffff) & 0xffff;
+  return ((member) | (mask << 16)) >>> 0;
+};
+
+/**
+ * Standardized system filter masks:
+ * - Ground probe should only hit ENV
+ * - Hitscan should hit ENEMY and ENV
+ * - Camera occlusion should hit CAMERA_BLOCKER only
+ */
+export const GROUND_PROBE_MASK = CollisionLayers.ENV;
+export const HITSCAN_MASK = (CollisionLayers.ENEMY | CollisionLayers.ENV);
+export const CAMERA_OCCLUSION_MASK = CollisionLayers.CAMERA_BLOCKER;

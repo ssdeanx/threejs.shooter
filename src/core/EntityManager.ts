@@ -99,6 +99,12 @@ export class EntityManager {
   }
   
   registerSystem(system: System): void {
+    // Prevent duplicate registration
+    if (this.systems.some(s => s.constructor === system.constructor)) {
+      console.warn(`System ${system.constructor.name} is already registered.`);
+      return;
+    }
+
     // Calculate required archetype for system
     const archetype = ComponentType.createArchetype(...system.getRequiredComponents());
     system.setRequiredArchetype(archetype);
@@ -135,5 +141,19 @@ export class EntityManager {
   
   getComponentArrays(): Map<string, unknown[]> {
     return this.componentArrays;
+  }
+
+  hash(): string {
+    let hash = '';
+    for (const [entityId, archetype] of this.entityArchetypes) {
+      hash += `${entityId}:${archetype};`;
+      for (const [componentName, components] of this.componentArrays) {
+        const component = components[entityId];
+        if (component) {
+          hash += `${componentName}:${JSON.stringify(component)};`;
+        }
+      }
+    }
+    return hash;
   }
 }

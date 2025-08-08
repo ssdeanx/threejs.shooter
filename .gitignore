@@ -24,3 +24,6 @@ coverage/
 
 
 assets/
+
+#Ignore windsurf AI rules
+.windsurfrules

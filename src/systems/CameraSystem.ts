@@ -4,7 +4,7 @@ import type { EntityId } from '../core/types.js';
 import type { EntityManager } from '../core/EntityManager.js';
 import type { PositionComponent } from '../components/TransformComponents.js';
 import type { CameraComponent } from '../components/RenderingComponents.js';
-import { CollisionLayers } from '@/core/CollisionLayers.js';
+import { CollisionLayers, CAMERA_OCCLUSION_MASK } from '@/core/CollisionLayers.js';
 import type { PhysicsSystem } from '@/systems/PhysicsSystem.js';
 
 export class CameraSystem extends System {
@@ -168,7 +168,7 @@ export class CameraSystem extends System {
         this._tmpC,
         distance,
         true,
-        CollisionLayers.CAMERA_BLOCKER
+        CAMERA_OCCLUSION_MASK
       );
 
       if (hit) {

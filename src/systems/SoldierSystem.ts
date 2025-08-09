@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import { System } from '../core/System.js';
 import type { EntityManager } from '../core/EntityManager.js';
+import type { EntityId } from '@/core/types.js';
+import type { PositionComponent, RotationComponent, ScaleComponent } from '@/components/TransformComponents.js';
+import type { VelocityComponent } from '@/components/PhysicsComponents.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
 type MixerHandle = {
@@ -20,6 +23,11 @@ export class SoldierSystem extends System {
 
   // Optional root for organizing character hierarchy in the scene
   private groupRoot: THREE.Group | null = null;
+  private targetEntity: EntityId | null = null;
+  // Reusable temps to avoid per-frame allocations
+  private _qTmp: THREE.Quaternion = new THREE.Quaternion();
+  // Track current animation to prevent restarting every frame
+  private _currentAnim: string | null = null;
 
   constructor(scene: THREE.Scene, entityManager: EntityManager) {
     // This System doesn't depend on ECS components; we tick every frame for animation
@@ -99,6 +107,31 @@ export class SoldierSystem extends System {
   }
 
   update(deltaTime: number): void {
+    // Follow target entity transform (position/rotation/scale) when assigned
+    if (this.groupRoot && this.targetEntity != null) {
+      const pos = this.entityManager.getComponent<PositionComponent>(this.targetEntity, 'PositionComponent');
+      if (pos) {
+        this.groupRoot.position.set(pos.x, pos.y, pos.z);
+      }
+      const rot = this.entityManager.getComponent<RotationComponent>(this.targetEntity, 'RotationComponent');
+      if (rot) {
+        this._qTmp.set(rot.x, rot.y, rot.z, rot.w);
+        this.groupRoot.quaternion.copy(this._qTmp);
+      }
+      const scl = this.entityManager.getComponent<ScaleComponent>(this.targetEntity, 'ScaleComponent');
+      if (scl) {
+        this.groupRoot.scale.set(scl.x, scl.y, scl.z);
+      }
+
+      // Animation selection based on velocity magnitude
+      const vel = this.entityManager.getComponent<VelocityComponent>(this.targetEntity, 'VelocityComponent');
+      if (vel && this.mixerHandle) {
+        const speedSq = vel.x * vel.x + vel.y * vel.y + vel.z * vel.z;
+        const running = speedSq > 0.01; // small threshold
+        this._playIfDifferent(running ? 'Soldier_Run' : 'Soldier_Idle');
+      }
+    }
+
     if (this.mixerHandle) {
       this.mixerHandle.mixer.update(deltaTime);
     }
@@ -170,5 +203,30 @@ export class SoldierSystem extends System {
       }
     });
     return found;
+  }
+
+  private _playIfDifferent(name: string): void {
+    if (!this.mixerHandle) {
+      return;
+    }
+    if (this._currentAnim === name) {
+      return;
+    }
+    const next = this.mixerHandle.actions[name];
+    if (!next) {
+      return;
+    }
+    const current = this._currentAnim ? this.mixerHandle.actions[this._currentAnim] : undefined;
+    if (current && current !== next && current.isRunning()) {
+      current.crossFadeTo(next.reset().play(), 0.2, false);
+    } else {
+      next.reset().play();
+    }
+    this._currentAnim = name;
+  }
+
+  // Presentation-only follow target; called by orchestrator to bind soldier visuals to an ECS entity
+  setTarget(entityId: EntityId): void {
+    this.targetEntity = entityId;
   }
 }

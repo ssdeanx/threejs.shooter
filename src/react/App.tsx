@@ -1,12 +1,14 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useRef } from 'react';
 import * as THREE from 'three';
-import { Canvas, useThree } from '@react-three/fiber';
+import { Canvas, useThree, useFrame } from '@react-three/fiber';
+import { Physics } from '@react-three/rapier';
 import { GameOrchestrator, useGameOrchestrator } from '@/react/GameOrchestrator.js';
 import PostFX from '@/react/PostFX.js';
 import { BindTransform, useEntityManager } from '@/react/ecs-bindings.js';
 import { RecorderState } from '@/systems/RecorderSystem';
 import { useUIStore } from './stores/uiStore'; // Import useUIStore
 import { Options } from './Options';
+import HUD from './HUD';
 
 const ENABLE_POSTFX = false;
 
@@ -122,62 +124,93 @@ function GltfExample(): React.ReactElement | null {
 
 function RecorderControls() {
   const orchestrator = useGameOrchestrator();
-  const { isOptionsOpen, toggleOptions } = useUIStore(); // Use useUIStore
+  const { isOptionsOpen } = useUIStore(); // Use useUIStore
   const [recorderState, setRecorderState] = useState(RecorderState.Stopped);
 
   const onRecord = () => {
-    if (!orchestrator) return;
+    if (!orchestrator) {
+      return;
+    }
     orchestrator.recorderSystem.record();
-    setRecorderState(orchestrator.recorderSystem.state);
+    setRecorderState(RecorderState.Recording);
   };
 
   const onReplay = () => {
-    if (!orchestrator) return;
+    if (!orchestrator) {
+      return;
+    }
     orchestrator.recorderSystem.replay();
-    setRecorderState(orchestrator.recorderSystem.state);
+    setRecorderState(RecorderState.Replaying);
   };
 
   const onStop = () => {
-    if (!orchestrator) return;
+    if (!orchestrator) {
+      return;
+    }
     orchestrator.recorderSystem.stop();
-    setRecorderState(orchestrator.recorderSystem.state);
+    setRecorderState(RecorderState.Stopped);
   };
 
-  // Toggle pause state in InputSystem and UI store
-  const onTogglePause = () => {
-    if (!orchestrator) return;
-    const newState = !orchestrator.inputSystem.getInputState().isPaused;
-    orchestrator.inputSystem.setInputState({ ...orchestrator.inputSystem.getInputState(), isPaused: newState });
-    // Also toggle options UI state
-    toggleOptions();
-  };
+  // Hide all settings unless Options is open (Esc)
+  if (!isOptionsOpen) {
+    return null;
+  }
 
   return (
-    <div style={{ position: 'absolute', top: 10, left: 10, zIndex: 1, color: 'white' }}>
-      <button type="button" onClick={onRecord} disabled={recorderState === RecorderState.Recording}>Record</button>
-      <button type="button" onClick={onReplay} disabled={recorderState === RecorderState.Replaying}>Replay</button>
-      <button type="button" onClick={onStop} disabled={recorderState === RecorderState.Stopped}>Stop</button>
-      {/* Use isOptionsOpen from Zustand to determine button text */}
-      <button type="button" onClick={onTogglePause}>{isOptionsOpen ? 'Close Options' : 'Open Options'}</button>
-      <p>State: {RecorderState[recorderState]}</p>
-      {isOptionsOpen && <Options />} {/* Conditionally render Options based on isOptionsOpen */}
+    <div className="fixed top-2 left-2 z-50 text-white pointer-events-auto">
+      <div className="flex gap-2">
+        <button type="button" onClick={onRecord} disabled={recorderState === RecorderState.Recording} className="px-2 py-1 rounded bg-neutral-800/70 enabled:hover:bg-neutral-700/70 disabled:opacity-50">Record</button>
+        <button type="button" onClick={onReplay} disabled={recorderState === RecorderState.Replaying} className="px-2 py-1 rounded bg-neutral-800/70 enabled:hover:bg-neutral-700/70 disabled:opacity-50">Replay</button>
+        <button type="button" onClick={onStop} disabled={recorderState === RecorderState.Stopped} className="px-2 py-1 rounded bg-neutral-800/70 enabled:hover:bg-neutral-700/70 disabled:opacity-50">Stop</button>
+      </div>
+      <p className="mt-2 text-xs text-neutral-300 select-none">State: {RecorderState[recorderState]}</p>
+      <Options />
     </div>
   );
+}
+
+// Sync InputSystem pause state (Esc) to UI store visibility; runs inside Canvas
+function PauseUISync() {
+  const orchestrator = useGameOrchestrator();
+  const prev = useRef<boolean | null>(null);
+  const { isOptionsOpen, toggleOptions } = useUIStore();
+  useFrame(() => {
+    if (!orchestrator) {
+      return;
+    }
+    const paused = orchestrator.inputSystem.getInputState().isPaused;
+    if (prev.current === null) {
+      prev.current = paused;
+      return;
+    }
+    if (paused !== prev.current) {
+      // Open options when paused; close when unpaused
+      if (paused !== isOptionsOpen) {
+        toggleOptions();
+      }
+      prev.current = paused;
+    }
+  });
+  return null;
 }
 
 export default function App() {
   return (
     <>
       <Canvas
+        className="w-screen h-screen block"
         shadows
         camera={{ fov: 75, near: 0.1, far: 1000 }}
         gl={{ antialias: true }}
-        style={{ width: '100vw', height: '100vh', display: 'block' }}
       >
-        <GameOrchestrator />
-        <Smoke />
-        <GltfExample />
-        <PostFX enabled={ENABLE_POSTFX} />
+        <Physics gravity={[0, -9.82, 0]}>
+          <GameOrchestrator />
+          <PauseUISync />
+          <HUD />
+          <Smoke />
+          <GltfExample />
+          <PostFX enabled={ENABLE_POSTFX} />
+        </Physics>
       </Canvas>
       <RecorderControls />
     </>

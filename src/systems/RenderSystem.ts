@@ -260,6 +260,40 @@ export class RenderSystem extends System {
             return group;
         }
 
+        // GLB steel target prefab
+        if (meshComp.meshId === 'steel_target') {
+            const group = new THREE.Group();
+            group.name = 'Steel_Target_Pending';
+            group.visible = meshComp.visible !== false;
+            this.gltfLoader.load(
+                'assets/models/targets/steel_target.glb',
+                (gltf) => {
+                    const root = gltf.scene || gltf.scenes?.[0];
+                    if (!root) {
+                        return;
+                    }
+                    root.traverse((o) => {
+                        const m = o as THREE.Mesh;
+                        if ((m as unknown as { isMesh?: boolean }).isMesh) {
+                            m.castShadow = true;
+                            m.receiveShadow = true;
+                        }
+                    });
+                    group.name = 'Steel_Target';
+                    while (group.children.length) {
+                        group.remove(group.children[0]);
+                    }
+                    root.position.set(0, 0, 0);
+                    root.rotation.set(0, 0, 0);
+                    root.scale.set(1, 1, 1);
+                    group.add(root);
+                },
+                undefined,
+                () => { /* ignore load error; keep placeholder group */ }
+            );
+            return group;
+        }
+
         // Fallback primitives for other meshIds
         // Get or create geometry by meshId
         let geometry = this.geometryCache.get(meshComp.meshId);

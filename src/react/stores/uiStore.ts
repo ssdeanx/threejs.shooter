@@ -31,3 +31,11 @@ export const useUIStore = create<UIState>((set) => ({
   },
   toggleOptions: () => set((state) => ({ isOptionsOpen: !state.isOptionsOpen })),
 }));
+
+// Selectors to minimize re-renders in components (prefer primitives)
+export const useIsOptionsOpen = () => useUIStore((s) => s.isOptionsOpen);
+export const useUIAudioMaster = () => useUIStore((s) => s.audio.master);
+export const useUIAudioSfx = () => useUIStore((s) => s.audio.sfx);
+export const useUIControlsSensitivity = () => useUIStore((s) => s.controls.sensitivity);
+export const useUIControlsInvertY = () => useUIStore((s) => s.controls.invertY);
+export const useUIGraphicsQuality = () => useUIStore((s) => s.graphics.quality);

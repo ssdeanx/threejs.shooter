@@ -1,7 +1,9 @@
-# Blender Workflow
-
-This document consolidates Blender-related guidance for asset preparation and integration with the Three.js/R3F shooter project.
-
+---
+description: This document consolidates Blender-related guidance for asset preparation and integration with the Three.js/R3F shooter project.
+title: Blender
+version: v0.4
+last_updated: 2025-08-09T04:29:45-04:00
+---
 ## Goals
 
 - Maintain consistent model and texture pipelines.
@@ -134,14 +136,6 @@ Policy & Hygiene (Content)
 - [BP] Texture naming: {asset}_{map}_{res}.png (e.g., crate_albedo_2k.png).
 - [*] All Blender/asset operations must be planned with a short note (who/what/why) in the Session Log.
 
-MCP Tools — Auxiliary (Web, NPM, Codacy)
-
-- fetch.fetch(url) — Internet retrieval for docs/specs (e.g., Rapier/Three/GLTF).
-- tavily.tavily-search — Real-time search for references/news (when needed).
-- npm-sentinel — Check NPM versions/vulns/size before adding deps (avoid bloat).
-- codacy_cli_analyze — On-demand local quality pass (do not replace PR gates).
-- context7 — Live docs for libraries (routing/hooks specifics when integrating R3F).
-
 Blender MCP Usage Playbooks (Examples)
 
 - Texture an imported model:
@@ -257,3 +251,110 @@ File naming:
 - [ ] Reasonable scale and orientation (+Y up)
 - [ ] Shadows configured appropriately in runtime code
 - [ ] No unused nodes/animations/materials
+- [ ] No secrets in binary assets
+
+---
+
+## Tool Reference (Schemas) — Blender MCP
+
+Use the following canonical tool names and parameter schemas (mapped to the connected Blender MCP server).
+
+- __blender.get_scene_info()__
+  - Params: none
+  - Returns: scene metadata (units, objects, materials, counts)
+
+- __blender.get_object_info(object_name)__
+  - Params: `object_name: string`
+  - Returns: object details (transform, mesh stats, materials, UVs)
+
+- __blender.get_viewport_screenshot(max_size)__
+  - Params: `max_size?: number` (default 800)
+  - Returns: Image (PNG)
+
+- __blender.execute_blender_code(code)__
+  - Params: `code: string` (small, idempotent Python snippets)
+  - Returns: execution status / payload; log errors explicitly
+
+- __blender.get_polyhaven_status() / blender.get_polyhaven_categories(asset_type)__
+  - Params: `asset_type?: 'hdris'|'textures'|'models'|'all'`
+  - Returns: integration status / category list
+
+- __blender.search_polyhaven_assets(asset_type, categories?)__
+  - Params: `asset_type: 'hdris'|'textures'|'models'|'all'`, `categories?: string`
+  - Returns: assets[] with ids and metadata
+
+- __blender.download_polyhaven_asset(asset_id, asset_type, resolution?, file_format?)__
+  - Params: `asset_id: string`, `asset_type: 'hdris'|'textures'|'models'`, `resolution?: '1k'|'2k'|'4k'`, `file_format?: string`
+  - Effect: downloads/imports asset into current scene
+
+- __blender.set_texture(object_name, texture_id)__
+  - Params: `object_name: string`, `texture_id: string`
+
+- __blender.get_hyper3d_status() / blender.generate_hyper3d_model_via_text(text_prompt, bbox_condition?)__
+  - Params: `text_prompt: string`, `bbox_condition?: [number, number, number]`
+  - Returns: generation task info (ids)
+
+- __blender.generate_hyper3d_model_via_images(input_image_paths|input_image_urls, bbox_condition?)__
+  - Params: Provide exactly one of `input_image_paths: string[]` or `input_image_urls: string[]`; optional `bbox_condition`
+
+- __blender.poll_rodin_job_status(subscription_key?|request_id?)__
+  - Params: MAIN_SITE → `subscription_key: string`; FAL_AI → `request_id: string`
+  - Returns: status; proceed only on terminal state
+
+- __blender.import_generated_asset(name, task_uuid?|request_id?)__
+  - Params: `name: string`, and exactly one of `task_uuid` or `request_id`
+
+- __blender.get_sketchfab_status() / blender.search_sketchfab_models(query, categories?, count?, downloadable?)__
+  - Params: `query: string`, `categories?: string`, `count?: number` (default 20), `downloadable?: boolean` (default true)
+  - Returns: models[] (ensure license + downloadable)
+
+- __blender.download_sketchfab_model(uid)__
+  - Params: `uid: string`
+
+Note: These map to the server’s underlying functions (e.g., `mcp0_get_object_info`, etc.) but are presented in a stable, human‑friendly API.
+
+---
+
+## Best Practices (2025)
+
+- __Scale/Units__: meters, +Y up, pivot at base; apply transforms before export.
+- __PBR discipline__: BaseColor (sRGB), Normal (Non‑Color, Tangent), ORM (linear). Include tangents on export when using normals.
+- __Textures__: power‑of‑two; KTX2 offline compression (ETC1S for albedo/ORM, UASTC for normals). Maintain consistent texel density across parts.
+- __Geometry__: avoid non‑manifold; even topology; one material per prop unless justified. Create LOD1/2 with preserved UVs/materials.
+- __Exports__: GLB with tangents; lights/cameras excluded unless needed. Draco for large meshes (profile on mobile).
+- __Manifests__: capture units, tri counts per LOD, materials, texture formats, license/source, collider hints.
+- __MCP hygiene__: small idempotent scripts; after each action, snapshot `get_object_info` + `get_viewport_screenshot`.
+
+---
+
+## Advanced Techniques
+
+- __KTX2 strategy__: ETC1S for color maps (albedo/ORM) to reduce VRAM and size; UASTC for normals to preserve high‑frequency detail. See Khronos KTX Artist Guide.
+- __Meshopt (gltfpack)__: post‑process GLBs for quantization and GPU‑friendly ordering. Validate tangents/animations after.
+- __Geometry Nodes families__: author parametric asset sets (barriers/targets/crates) with exposed inputs; bake to mesh + single UV + trimsheet.
+- __Retopo + bake after Hyper3D__: use prompt constraints (bbox_condition, tri budgets) but always validate topology; rebake PBR to unify material space.
+- __Atlas for micro‑props__: atlas small props to a single trimsheet to cut draw calls; keep an eye on atlas size on mobile.
+
+---
+
+## Hygiene & Anti‑Patterns
+
+- __Do not__: mix color spaces (e.g., sRGB normals), ship non‑power‑of‑two textures, leave transforms unapplied, or export many tiny materials.
+- __Avoid__: overusing Draco on tiny meshes; baking‑omitted procedural materials; missing tangents; misaligned pivots.
+- __No orphan assets__: every asset has a manifest and is referenced by the game or a tracked task.
+
+---
+
+## Prompt & Workflow Libraries
+
+- See `blender_prompts.md` for extensive prompt templates (Hyper3D text/image, Blender procedural, Python MCP micro‑tasks, negatives, style mix‑ins).
+- See `blender_workflows.md` for step‑by‑step playbooks (PolyHaven/Sketchfab intake, Hyper3D generation, GN families, export/compression, QA).
+
+---
+
+## References
+
+- Blender glTF 2.0 (4.5 LTS): [docs.blender.org/manual/.../scene_gltf2](https://docs.blender.org/manual/en/latest/addons/import_export/scene_gltf2.html)
+- KTX2 Artist Guide (Khronos): [KTXArtistGuide.md](https://github.com/KhronosGroup/3D-Formats-Guidelines/blob/main/KTXArtistGuide.md)
+- Meshopt / gltfpack: [meshoptimizer.org/gltf](https://meshoptimizer.org/gltf/)
+- PolyHaven standards: [docs.polyhaven.com/technical-standards/textures](https://docs.polyhaven.com/en/technical-standards/textures)

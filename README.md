@@ -276,51 +276,76 @@ flowchart TD
 
 ---
 
-## Roadmap Graph
+## Current Work Graph
 
 Visual dependency graph of current and near-term work.  
 Legend: ✅ done, 🚧 in-progress, 🎯 planned, 🔒 policy/process gate.
 
 ```mermaid
 graph TD
-  %% Core Foundations
-  A[ECS Deterministic Loop ✅] --> B[Rapier PhysicsSystem ✅]
-  B --> C[Raycast API ✅]
-  B --> D[Collision Layers & Masks 🔒]
-  D --> I[Camera Blockers 🎯]
-  C --> K[Hitscan via Raycast 🎯]
 
-  %% Gameplay
-  E[Movement System 🚧] --> F[Ground Check (Raycast) 🎯]
-  E --> G[Kinematic/Dynamic Control 🎯]
-  H[Camera System 🚧] --> I
-  J[Combat System 🚧] --> K
-
-  %% Hygiene/Policy
-  P[Zero-Unused & Zero-Lint ✅]
-  Q[MCP Planning for Masks 🔒] --> D
-
-  %% Integration & Content
-  L[Perf Pass & Temp Reuse 🟣]
-  M[Lint/Types Zero-Warn 🟣]
-  N[Map/Level Art Pass 🟣]
-  O[Animations/Polish 🟣]
-  R[Playtest/QA 🟣]
-
-  %% Future Scope
-  S[Netcode/Multiplayer 🟤]
-  T[Cosmetics/Progression 🟤]
-  U[Modding/Workshop 🟤]
-
-  %% Dependencies
-  F --> H
-  F --> J
-  G --> J
-  N --> O
-  O --> R
-  R --> S
-  S --> T
-  T --> U
+    10["User<br>External Actor"]
+    subgraph 1["Build &amp; Config System<br>TypeScript/Node.js"]
+        35["Vite Config<br>Vite"]
+        36["ESLint Config<br>ESLint"]
+        39["Styles<br>Tailwind CSS"]
+        subgraph 2["HTML Entry Point<br>HTML"]
+            37["Root index.html<br>HTML"]
+            38["Public index.html<br>HTML"]
+        end
+        subgraph 3["TypeScript Config<br>TypeScript"]
+            33["tsconfig.json<br>TypeScript"]
+            34["tsconfig.node.json<br>TypeScript"]
+        end
+        subgraph 4["Package Management<br>npm"]
+            31["package.json<br>npm"]
+            32["package-lock.json<br>npm"]
+        end
+        %% Edges at this level (grouped by source)
+        35["Vite Config<br>Vite"] -->|Bundles| 2["HTML Entry Point<br>HTML"]
+        35["Vite Config<br>Vite"] -->|Processes| 39["Styles<br>Tailwind CSS"]
+        4["Package Management<br>npm"] -->|Manages dependencies for| 3["TypeScript Config<br>TypeScript"]
+        4["Package Management<br>npm"] -->|Manages dependencies for| 35["Vite Config<br>Vite"]
+        4["Package Management<br>npm"] -->|Manages dependencies for| 36["ESLint Config<br>ESLint"]
+        3["TypeScript Config<br>TypeScript"] -->|Configures compilation for| 35["Vite Config<br>Vite"]
+    end
+    subgraph 5["ECS Core System<br>TypeScript"]
+        22["Entity Manager<br>TypeScript"]
+        23["Base System<br>TypeScript"]
+        subgraph 6["Core Types &amp; Utilities<br>TypeScript"]
+            29["Core Types<br>TypeScript"]
+            30["Collision Layers<br>TypeScript"]
+        end
+        subgraph 7["Component Types<br>TypeScript"]
+            24["ComponentType Enum<br>TypeScript"]
+            25["Gameplay Components<br>TypeScript"]
+            26["Physics Components<br>TypeScript"]
+            27["Rendering Components<br>TypeScript"]
+            28["Transform Components<br>TypeScript"]
+        end
+        %% Edges at this level (grouped by source)
+        6["Core Types &amp; Utilities<br>TypeScript"] -->|Provides types for| 7["Component Types<br>TypeScript"]
+        6["Core Types &amp; Utilities<br>TypeScript"] -->|Provides types for| 22["Entity Manager<br>TypeScript"]
+        6["Core Types &amp; Utilities<br>TypeScript"] -->|Provides types for| 23["Base System<br>TypeScript"]
+        22["Entity Manager<br>TypeScript"] -->|Manages entities| 7["Component Types<br>TypeScript"]
+        23["Base System<br>TypeScript"] -->|Defines system interface| 22["Entity Manager<br>TypeScript"]
+    end
+    subgraph 9["Frontend/UI System<br>React/Three.js"]
+        11["Main UI &amp; App<br>React"]
+        12["Game Orchestrator<br>React/Three.js"]
+        13["Core UI Components<br>React"]
+        14["ECS Integration<br>TypeScript/React"]
+        %% Edges at this level (grouped by source)
+        11["Main UI &amp; App<br>React"] -->|Renders| 12["Game Orchestrator<br>React/Three.js"]
+        11["Main UI &amp; App<br>React"] -->|Renders| 13["Core UI Components<br>React"]
+        14["ECS Integration<br>TypeScript/React"] -->|Provides data to| 12["Game Orchestrator<br>React/Three.js"]
+        14["ECS Integration<br>TypeScript/React"] -->|Manages UI state| 13["Core UI Components<br>React"]
+        12["Game Orchestrator<br>React/Three.js"] -->|Bridges to ECS via| 14["ECS Integration<br>TypeScript/React"]
+    end
+    %% Edges at this level (grouped by source)
+    1["Build &amp; Config System<br>TypeScript/Node.js"] -->|Configures & Builds| 5["ECS Core System<br>TypeScript"]
+    1["Build &amp; Config System<br>TypeScript/Node.js"] -->|Configures & Builds| 9["Frontend/UI System<br>React/Three.js"]
+    10["User<br>External Actor"] -->|Interacts with| 9["Frontend/UI System<br>React/Three.js"]
 ```
 
 ---

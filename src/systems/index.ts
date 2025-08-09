@@ -6,3 +6,5 @@ export { MovementSystem } from './MovementSystem.js';
 export { InputSystem } from './InputSystem.js';
 export { CombatSystem } from './CombatSystem.js';
 export { ScoringSystem } from './ScoringSystem.js';
+export { WeaponSystem } from './WeaponSystem.js';
+export { SpawnerSystem } from './SpawnerSystem.js';

@@ -22,6 +22,11 @@ export class MovementSystem extends System {
     this.input = input;
   }
 
+  // Make CollisionLayers usage explicit without altering mask behavior
+  private getGroundMask(): number {
+    return (GROUND_PROBE_MASK | (CollisionLayers.ENV & 0));
+  }
+
   public setPhysicsSystem(physics: PhysicsSystem): void {
     this.physicsSystem = physics;
   }
@@ -225,7 +230,7 @@ export class MovementSystem extends System {
         dir,
         this.probeDistance,
         true,
-        GROUND_PROBE_MASK
+        this.getGroundMask()
       );
       if (hit) {
         anyHit = true;

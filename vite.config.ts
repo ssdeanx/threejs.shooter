@@ -1,14 +1,17 @@
 import { defineConfig } from 'vite';
-import { resolve } from 'node:path';
+import tailwind from '@tailwindcss/vite';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-// In ESM Vite config, import.meta.url is available; construct a dirname.
-// Use a small helper to avoid TS complaining about URL type.
-const DIRNAME = new URL('.', import.meta.url).pathname;
+// Resolve dirname without relying on global URL (avoids DOM lib requirement)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 export default defineConfig({
+  plugins: [tailwind()],
   resolve: {
     alias: {
-      '@': resolve(DIRNAME, 'src'),
+      '@': path.resolve(__dirname, 'src'),
     },
   },
   server: {

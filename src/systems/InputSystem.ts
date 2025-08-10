@@ -123,8 +123,8 @@ private addListener<K extends keyof globalThis.DocumentEventMap>(
     this.attachedEl = target;
 
     // Ensure target can receive focus and keyboard
-    if ((this.attachedEl as any).tabIndex == null || (this.attachedEl as any).tabIndex < 0) {
-      (this.attachedEl as any).tabIndex = 0;
+    if (this.attachedEl.tabIndex == null || this.attachedEl.tabIndex < 0) {
+      this.attachedEl.tabIndex = 0;
     }
 
     // Focus on click to ensure key events deliver to element
@@ -206,10 +206,7 @@ private addListener<K extends keyof globalThis.DocumentEventMap>(
     this.clearInputState();
   }
 
-  private setupInputListeners(): void {
-    // Kept for backward compatibility if ever called; route to document-less attach (no-op)
-    // Prefer attach(target) from orchestrator.
-  }
+
 
   private handleKeyDown(event: globalThis.KeyboardEvent): void {
     // Add to buffer for responsive input

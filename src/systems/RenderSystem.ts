@@ -107,7 +107,7 @@ export class RenderSystem extends System {
         // Ensure no accidental surrounding walls: remove any tall planes/boxes tagged as 'wall'
         const toRemove: THREE.Object3D[] = [];
         this.scene.traverse((o) => {
-            if ((o as any).userData?.type === 'wall') {
+            if (o.userData?.type === 'wall') {
             toRemove.push(o);
             }
         });
@@ -144,7 +144,7 @@ export class RenderSystem extends System {
 
             // Update rotation if available
             if (rotation) {
-                const q: THREE.Quaternion | undefined = (obj as any).quaternion;
+                const q: THREE.Quaternion | undefined = (obj as THREE.Object3D & { quaternion?: THREE.Quaternion }).quaternion;
                 if (q) {
                     q.set(rotation.x, rotation.y, rotation.z, rotation.w);
                 } else {
@@ -160,7 +160,7 @@ export class RenderSystem extends System {
             }
 
             // Update visibility
-            (obj as any).visible = meshComp.visible;
+            (obj as THREE.Object3D & { visible?: boolean }).visible = meshComp.visible;
 
             // Advance animation mixer if any
             const mixer = this.entityMixer.get(entityId);
